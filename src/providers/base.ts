@@ -22,6 +22,8 @@ export interface ChatOptions {
   stream?: boolean;
   tools?: Tool[];
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  /** Router-level flag: when true, only the primary provider is tried (no fallback) */
+  disableFallback?: boolean;
 }
 
 export interface Tool {

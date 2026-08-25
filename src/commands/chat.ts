@@ -2,11 +2,19 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import * as readline from 'readline';
 import { Router } from '../router';
-import { loadConfig, saveConfig, maskApiKey } from '../config';
-import { createSpinner, formatCost, formatDuration, formatUsage, estimateTokens } from '../utils';
+import { loadConfig, saveConfig, maskApiKey, DEFAULT_SYSTEM_PROMPT } from '../config';
+import { createSpinner, formatCost, formatDuration, formatUsage, estimateTokens, calculateCost } from '../utils';
+import {
+  formatMemoryForPrompt,
+  learnFromMessage,
+  getAllFacts,
+  forgetFact,
+  rememberFact
+} from '../utils/memory';
 import { Message } from '../providers';
 import {
   loadSession,
+  saveSession,
   createSession,
   addMessage,
   getMessagesForApi,
@@ -146,9 +154,12 @@ export function createChatCommand(router: Router): Command {
       let session: ConversationSession;
       
       if (options.continue) {
-        session = loadSession(options.continue) || createSession(model, options.system);
-        if (!loadSession(options.continue)) {
+        const existing = loadSession(options.continue);
+        if (existing) {
+          session = existing;
+        } else {
           console.log(chalk.yellow(`Session ${options.continue} not found. Starting new session.`));
+          session = createSession(model, options.system);
         }
       } else if (options.new) {
         session = createSession(model, options.system);
@@ -181,6 +192,23 @@ export function createChatCommand(router: Router): Command {
 }
 
 /**
+ * Compose the final system prompt: user prompt (or genius default) + long-term memory
+ */
+function buildSystemPrompt(config: any, userSystem?: string): string {
+  const parts: string[] = [];
+
+  const base = userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  parts.push(base);
+
+  if (config.settings.useMemory !== false) {
+    const memBlock = formatMemoryForPrompt();
+    if (memBlock) parts.push(memBlock);
+  }
+
+  return parts.join('\n\n');
+}
+
+/**
  * Interactive multi-turn chat mode
  */
 async function startInteractiveMode(
@@ -204,7 +232,7 @@ async function startInteractiveMode(
   console.log(chalk.cyan('└─────────────────────────────────────────┘'));
   console.log();
   console.log(chalk.gray('  Type your message and press Enter.'));
-  console.log(chalk.gray('  Commands: /quit, /history, /clear, /new, /model <name>, /help'));
+  console.log(chalk.gray('  Commands: /quit, /history, /clear, /new, /model <name>, /memory, /help'));
   console.log();
   
   const askQuestion = (): Promise<string> => {
@@ -255,12 +283,54 @@ async function startInteractiveMode(
         case '/model':
           if (args) {
             session.model = args;
+            saveSession(session);
             console.log(chalk.green(`✓ Model changed to: ${args}`));
           } else {
             console.log(chalk.gray(`Current model: ${session.model}`));
             console.log(chalk.gray('Usage: /model <model-name>'));
           }
           break;
+
+        case '/memory': {
+          const facts = getAllFacts();
+          if (facts.length === 0) {
+            console.log(chalk.gray('Long-term memory is empty. Say "remember that ..." to store facts.'));
+          } else {
+            console.log();
+            console.log(chalk.cyan(`Long-term memory (${facts.length} facts):`));
+            for (const f of facts) {
+              const src = f.source === 'auto' ? chalk.gray(' [auto]') : chalk.magenta(' [manual]');
+              console.log(`  ${chalk.yellow(f.key)}${src}: ${chalk.white(f.value)}`);
+            }
+            console.log();
+          }
+          break;
+        }
+
+        case '/remember': {
+          // Usage: /remember <key> <value...>
+          const spaceIdx = args.indexOf(' ');
+          if (!args || spaceIdx === -1) {
+            console.log(chalk.gray('Usage: /remember <key> <value>  e.g. /remember user.name Saka'));
+          } else {
+            const key = args.slice(0, spaceIdx).trim();
+            const value = args.slice(spaceIdx + 1).trim();
+            rememberFact(key, value, 'manual');
+            console.log(chalk.green(`✓ Remembered ${key} = ${value}`));
+          }
+          break;
+        }
+
+        case '/forget': {
+          if (!args) {
+            console.log(chalk.gray('Usage: /forget <key>  e.g. /forget note.buy-milk'));
+          } else if (forgetFact(args.trim())) {
+            console.log(chalk.green(`✓ Forgot: ${args.trim()}`));
+          } else {
+            console.log(chalk.yellow(`Key not found in memory: ${args.trim()}`));
+          }
+          break;
+        }
 
         case '/help':
           console.log();
@@ -270,6 +340,9 @@ async function startInteractiveMode(
           console.log(chalk.gray('  /clear             Clear history & start new session'));
           console.log(chalk.gray('  /new               Start new session (keep history)'));
           console.log(chalk.gray('  /model [name]      Show or change model'));
+          console.log(chalk.gray('  /memory            Show long-term memory facts'));
+          console.log(chalk.gray('  /remember <k> <v>  Store a fact permanently'));
+          console.log(chalk.gray('  /forget <key>      Delete a memory fact'));
           console.log(chalk.gray('  /help              Show this help'));
           console.log();
           break;
@@ -303,7 +376,27 @@ async function sendMessage(
   const model = session.model;
   const spinner = createSpinner({ text: `Thinking...` });
   
-  const messages = getMessagesForApi(session, prompt);
+  // Persist user message BEFORE the API call so it survives failures
+  addMessage(session, 'user', prompt);
+  
+  // Auto-learn facts from the user's message (name, preferences, explicit "remember X")
+  const learned = learnFromMessage(prompt);
+  if (learned.length > 0) {
+    console.log(chalk.gray(`  🧠 Remembered: ${learned.join(', ')}`));
+  }
+  
+  const messages = getMessagesForApi(session);
+  
+  // Inject composed system prompt (genius default / user override + long-term memory)
+  const sysContent = buildSystemPrompt(config, options.system);
+  if (sysContent) {
+    const sysIdx = messages.findIndex(m => m.role === 'system');
+    if (sysIdx >= 0) {
+      messages[sysIdx] = { role: 'system', content: sysContent };
+    } else {
+      messages.unshift({ role: 'system', content: sysContent });
+    }
+  }
 
   const startTime = Date.now();
   let fullResponse = '';
@@ -311,7 +404,6 @@ async function sendMessage(
   try {
     spinner.start();
     
-    const fallbackModels = options.fallback ? config.fallbackModels : [];
     let spinnerStopped = false;
     
     for await (const chunk of router.chat({
@@ -321,9 +413,10 @@ async function sendMessage(
         model,
         temperature: options.temperature ?? config.settings.temperature,
         maxTokens: options.maxTokens ?? config.settings.maxTokens,
-        stream: options.stream ?? config.settings.stream
+        stream: options.stream ?? config.settings.stream,
+        disableFallback: options.fallback === false
       },
-      fallbackModels
+      fallbackModels: options.fallback ? config.fallbackModels : []
     })) {
       if (!spinnerStopped) {
         spinner.stop();
@@ -335,8 +428,7 @@ async function sendMessage(
     
     console.log();
     
-    // Save to history
-    addMessage(session, 'user', prompt);
+    // Save assistant response to history
     addMessage(session, 'assistant', fullResponse);
     
     const duration = Date.now() - startTime;
@@ -351,7 +443,8 @@ async function sendMessage(
       }
       stats.push(`Time: ${formatDuration(duration)}`);
       if (config.settings.showCost) {
-        const cost = estimateCost(model, Math.round(inputTokens), Math.round(outputTokens));
+        const usage = { input: Math.round(inputTokens), output: Math.round(outputTokens), total: Math.round(inputTokens + outputTokens) };
+        const cost = calculateCost(router.lastProvider || 'unknown', router.lastModel || model, usage);
         stats.push(`Cost: ${formatCost(cost)}`);
       }
       console.log(chalk.gray(`  ${stats.join(' │ ')}`));
@@ -360,33 +453,7 @@ async function sendMessage(
     
   } catch (err) {
     spinner.fail(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    console.log(chalk.gray('  (Your message was saved to history. Try again or use a different model via /model)'));
     console.log();
   }
-}
-
-/**
- * Estimate cost based on model and token usage
- */
-function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const rates: Record<string, { input: number; output: number }> = {
-    'groq': { input: 0, output: 0 },
-    'cerebras': { input: 0, output: 0 },
-    'gemini': { input: 0, output: 0 },
-    'sambanova': { input: 0, output: 0 },
-    'ollama': { input: 0, output: 0 },
-    'together': { input: 0.0001, output: 0.0003 },
-    'openrouter': { input: 0.00015, output: 0.0006 },
-    'novita': { input: 0.0001, output: 0.0003 },
-    'requesty': { input: 0.00015, output: 0.0006 }
-  };
-  
-  let provider = 'unknown';
-  if (model.includes('llama') && !model.includes('openrouter')) provider = 'groq';
-  else if (model.includes('gemini')) provider = 'gemini';
-  else if (model.includes('mixtral')) provider = 'groq';
-  else if (model.includes('gemma')) provider = 'groq';
-  else provider = 'together';
-  
-  const rate = rates[provider] || { input: 0, output: 0 };
-  return (inputTokens * rate.input + outputTokens * rate.output) / 1000;
 }

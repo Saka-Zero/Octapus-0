@@ -8,5 +8,6 @@ export { CerebrasProvider } from './cerebras';
 export { SambaNovaProvider } from './sambanova';
 export { TogetherProvider } from './together';
 export { NovitaProvider } from './novita';
+export { OpenAICompatibleProvider } from './openai-compatible';
 
 export type { Provider as IProvider } from './base';

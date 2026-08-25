@@ -44,12 +44,17 @@ export class Router {
     return undefined;
   }
 
-  getFallbackChain(model: string, fallbackModels?: string[]): Array<{ provider: Provider; modelToUse: string }> {
+  getFallbackChain(model: string, fallbackModels?: string[], disableFallback = false): Array<{ provider: Provider; modelToUse: string }> {
     const chain: Array<{ provider: Provider; modelToUse: string }> = [];
     const primary = this.getProviderForModel(model);
     if (primary) {
       const modelToUse = primary.models.includes(model) ? model : primary.models[0];
       chain.push({ provider: primary, modelToUse });
+    }
+
+    // If fallback is disabled, only use the primary provider
+    if (disableFallback) {
+      return chain;
     }
 
     // Add fallback models from config (or override if provided)
@@ -63,14 +68,17 @@ export class Router {
       }
     }
 
-    // Add any other enabled providers (skip if not enabled)
-    for (const provider of this.providers.values()) {
-      if (!chain.some(c => c.provider === provider)) {
+    // Add any other enabled providers sorted by priority (highest first)
+    const remaining = Array.from(this.providers.values())
+      .filter(provider => !chain.some(c => c.provider === provider))
+      .filter(provider => {
         const cfg = this.config.providers[provider.name];
-        if (cfg?.enabled && provider.models.length > 0) {
-          chain.push({ provider, modelToUse: provider.models[0] });
-        }
-      }
+        return cfg?.enabled && provider.models.length > 0;
+      })
+      .sort((a, b) => b.priority - a.priority);
+
+    for (const provider of remaining) {
+      chain.push({ provider, modelToUse: provider.models[0] });
     }
 
     return chain;
@@ -78,7 +86,7 @@ export class Router {
 
   async *chat(options: RouterOptions): AsyncIterable<string> {
     const { model, messages, options: chatOptions, fallbackModels } = options;
-    const chain = this.getFallbackChain(model, fallbackModels);
+    const chain = this.getFallbackChain(model, fallbackModels, chatOptions?.disableFallback ?? false);
     
     if (chain.length === 0) {
       throw new Error(`No provider available for model: ${model}`);

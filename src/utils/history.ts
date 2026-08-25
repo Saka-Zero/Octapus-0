@@ -4,8 +4,9 @@ import { Message } from '../providers';
 import chalk from 'chalk';
 
 const HISTORY_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'octapus', 'history');
-const MAX_HISTORY_MESSAGES = 100; // Max messages to keep in context
+const MAX_HISTORY_MESSAGES = 100; // Hard cap on messages kept in context
 const MAX_HISTORY_FILES = 20; // Max conversation files to keep
+const CONTEXT_CHAR_BUDGET = 48000; // ~14k tokens of conversation history (excl. system prompt)
 
 export interface ConversationSession {
   id: string;
@@ -17,11 +18,12 @@ export interface ConversationSession {
 }
 
 /**
- * Generate a short session ID from timestamp
+ * Generate a short session ID from timestamp + random suffix (collision-safe)
  */
 function generateSessionId(): string {
   const now = new Date();
-  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}_${rand}`;
 }
 
 /**
@@ -61,14 +63,6 @@ function getLatestSessionId(): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Get current session ID (based on today's date)
- */
-function getCurrentSessionId(): string {
-  const now = new Date();
-  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
 }
 
 /**
@@ -143,7 +137,7 @@ export function addMessage(session: ConversationSession, role: 'user' | 'assista
 /**
  * Get messages for API call (with context window management)
  */
-export function getMessagesForApi(session: ConversationSession, newPrompt: string): Message[] {
+export function getMessagesForApi(session: ConversationSession, newPrompt?: string): Message[] {
   const messages: Message[] = [];
   
   // Add system message if present
@@ -155,15 +149,28 @@ export function getMessagesForApi(session: ConversationSession, newPrompt: strin
   // Add conversation history (excluding system message)
   const historyMessages = session.messages.filter(m => m.role !== 'system');
   
-  // If history is too long, keep the most recent messages
+  // Hard cap on message count first
   const recentMessages = historyMessages.slice(-MAX_HISTORY_MESSAGES);
   
-  for (const msg of recentMessages) {
+  // Then fit within character budget — keep the most recent messages that fit,
+  // walking backwards so the newest context is always preserved
+  const kept: Message[] = [];
+  let used = 0;
+  for (let i = recentMessages.length - 1; i >= 0; i--) {
+    const len = recentMessages[i].content.length;
+    if (used + len > CONTEXT_CHAR_BUDGET && kept.length > 0) break;
+    kept.unshift(recentMessages[i]);
+    used += len;
+  }
+  
+  for (const msg of kept) {
     messages.push(msg);
   }
   
-  // Add new prompt
-  messages.push({ role: 'user', content: newPrompt });
+  // Add new prompt (if not already persisted in session)
+  if (newPrompt) {
+    messages.push({ role: 'user', content: newPrompt });
+  }
   
   return messages;
 }

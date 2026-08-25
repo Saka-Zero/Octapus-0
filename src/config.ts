@@ -13,8 +13,22 @@ export interface Config {
     stream: boolean;
     showCost: boolean;
     showTokens: boolean;
+    /** Custom system prompt; empty = built-in reasoning-optimized default */
+    systemPrompt: string;
+    /** Inject long-term memory into every request */
+    useMemory: boolean;
   };
 }
+
+/** Built-in default system prompt — optimized for deep reasoning */
+export const DEFAULT_SYSTEM_PROMPT = `You are Octapus, a brilliant AI assistant with expert-level reasoning.
+
+Thinking protocol:
+1. Understand the request fully before answering; ask clarifying questions only when truly ambiguous.
+2. For complex problems, reason step by step internally, then present a clear, structured answer.
+3. Verify your own logic before responding — check edge cases, math, and assumptions.
+4. Be precise and concrete: exact commands, code, numbers. No vague hand-waving.
+5. Admit uncertainty honestly instead of inventing facts.`;
 
 const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'octapus');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yaml');
@@ -31,20 +45,22 @@ const DEFAULT_CONFIG: Config = {
     novita: { apiKey: '', priority: 2, enabled: false },
     requesty: { apiKey: '', priority: 1, enabled: false }
   },
-  defaultModel: 'llama-3.1-70b-versatile',
+  defaultModel: 'llama-3.3-70b-versatile',
   fallbackModels: [
-    'llama-3.1-8b',
-    'Meta-Llama-3.1-70B-Instruct',
-    'gemini-1.5-flash-latest',
     'llama-3.1-8b-instant',
-    'mixtral-8x7b-32768'
+    'Meta-Llama-3.1-70B-Instruct',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'meta-llama/llama-4-scout:free'
   ],
   settings: {
     temperature: 0.7,
     maxTokens: 4096,
     stream: true,
     showCost: true,
-    showTokens: true
+    showTokens: true,
+    systemPrompt: '',
+    useMemory: true
   }
 };
 
@@ -85,7 +101,9 @@ export function resetConfig(): Config {
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
   for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+    // Skip null/undefined values from YAML so defaults survive
+    if (source[key] === null || source[key] === undefined) continue;
+    if (typeof source[key] === 'object' && !Array.isArray(source[key])) {
       result[key] = deepMerge(target[key] || {}, source[key]);
     } else {
       result[key] = source[key];
