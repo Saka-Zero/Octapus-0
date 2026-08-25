@@ -40,13 +40,19 @@ function ensureChalks(accent?: string, muted?: string): void {
 function inline(s: string): string {
   s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, chalk.gray('🖼 $1'));
   s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, chalk.blue.underline('$1'));
-  s = s.replace(/\*\*\*([^*]+)\*\*\*/g, chalk.bold.italic('$1'));
-  s = s.replace(/\*\*([^*]+)\*\*/g, chalk.bold('$1'));
-  s = s.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1' + chalk.italic('$2'));
-  s = s.replace(/(^|[\s(])_([^_\n]+)_/g, '$1' + chalk.italic('$2'));
-  s = s.replace(/~~([^~]+)~~/g, chalk.strikethrough('$1'));
+  // Two passes so adjacent/nested emphasis pairs resolve cleanly
+  for (let i = 0; i < 2; i++) {
+    s = s.replace(/\*\*\*([^*]+?)\*\*\*/g, chalk.bold.italic('$1'));
+    s = s.replace(/\*\*([^*]+?)\*\*/g, chalk.bold('$1'));
+    s = s.replace(/__([^_]+?)__/g, chalk.bold('$1'));
+    s = s.replace(/(^|[\s(])\*([^*\n]+?)\*/g, '$1' + chalk.italic('$2'));
+    s = s.replace(/(^|[\s(])_([^_\n]+?)_/g, '$1' + chalk.italic('$2'));
+    s = s.replace(/~~([^~]+?)~~/g, chalk.strikethrough('$1'));
+  }
   // inline code LAST so ** inside `code` doesn't get double-processed badly
   s = s.replace(/`([^`]+)`/g, chalk.cyan('$1'));
+  // Strip any orphan emphasis markers left over (malformed markdown)
+  s = s.replace(/\*\*(?=\S)/g, '').replace(/(?<=\S)\*\*/g, '');
   return s;
 }
 
@@ -118,8 +124,8 @@ export function renderMarkdown(text: string, opts?: RenderOptions): string {
       continue;
     }
 
-    // Ordered list
-    const ol = raw.match(/^(\s*)(\d+)\.\s+(.*)$/);
+    // Ordered list (space after dot optional — models vary)
+    const ol = raw.match(/^(\s*)(\d+)\.\s*(.*)$/);
     if (ol) {
       out.push(`${ol[1]}${chalk.cyan(ol[2] + '.')} ${inline(ol[3])}`);
       continue;
