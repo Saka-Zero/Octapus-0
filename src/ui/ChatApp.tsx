@@ -18,6 +18,7 @@ import { runCouncil } from '../council';
 import * as fs from 'fs';
 import * as path from 'path';
 import { formatProjectContext } from '../utils/projectContext';
+import { listCustomAgents, getCustomAgent, CustomAgent } from '../utils/customAgents';
 
 interface ChatAppProps {
   router: Router;
@@ -65,9 +66,10 @@ function ApprovalPrompt({ tool, summary, onDecision }: { tool: string; summary: 
   );
 }
 
-function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string, persona?: string): string {
+function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string, persona?: string, agentPrompt?: string): string {
   const parts: string[] = [];
-  parts.push(userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
+  // Custom agent persona takes precedence over the default genius prompt
+  parts.push(agentPrompt || userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
   const projectCtx = formatProjectContext();
   if (projectCtx) parts.push(projectCtx);
   if (config.settings.useMemory !== false) {
@@ -136,6 +138,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   // Council is the DEFAULT experience: every prompt = all specialists deliberate
   const [councilMode, setCouncilMode] = useState(config.settings.councilMode !== false);
   const [pendingApproval, setPendingApproval] = useState<{ tool: string; summary: string; resolve: (ok: boolean) => void } | null>(null);
+  const [activeAgent, setActiveAgent] = useState<CustomAgent | null>(null);
 
   const sessionRef = useRef<ConversationSession>(initialSession);
   const [headerModel, setHeaderModel] = useState(initialSession.model);
@@ -185,7 +188,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     pushNote(`🎯 ${domainLabel(domain)}`);
 
     const messages = getMessagesForApi(sessionRef.current);
-    const sysContent = buildSystemPrompt(config, options.system, skillText, DOMAIN_PERSONAS[domain]);
+    const sysContent = buildSystemPrompt(config, options.system, skillText, DOMAIN_PERSONAS[domain], activeAgent?.systemPrompt);
     if (sysContent) {
       const idx = messages.findIndex((m) => m.role === 'system');
       if (idx >= 0) messages[idx] = { role: 'system', content: sysContent };
@@ -371,6 +374,8 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/remember <k> <v>  Store a fact permanently',
           '/forget <key>      Delete a memory fact',
           '/skills            List available skills',
+          '/agents            List custom agents (markdown personas)',
+          '/use <name>        Activate a custom agent (/use off to exit)',
           '/learn <lesson>    Teach me a lesson permanently',
           '/digest            Show rolling conversation digest',
           '/theme [name]      Switch theme (' + listThemeNames().join(', ') + ')',
@@ -514,6 +519,38 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
             : 'No digest yet — builds automatically when history exceeds the context window.'
         );
         return true;
+
+      case '/agents': {
+        const all = listCustomAgents();
+        if (all.length === 0) {
+          pushNote('No custom agents. Create ~/.config/octapus/agents/<name>.md with frontmatter (description/model/temperature/role) + body as system prompt.');
+        } else {
+          const lines = all.map((a) => `${a.name.padEnd(20)} ${a.model || '(default model)'} — ${a.description.slice(0, 55)}`);
+          pushNote(`Custom agents (${all.length}):\n${lines.join('\n')}\n\nActivate: /use <name> · Deactivate: /use off`);
+        }
+        return true;
+      }
+
+      case '/use': {
+        if (!args || args === 'off') {
+          setActiveAgent(null);
+          pushNote('Custom agent deactivated — back to default persona.');
+          return true;
+        }
+        const agent = getCustomAgent(args);
+        if (!agent) {
+          pushNote(`Agent not found: ${args}. Available: ${listCustomAgents().map((a) => a.name).join(', ')}`);
+          return true;
+        }
+        setActiveAgent(agent);
+        if (agent.model) {
+          sessionRef.current.model = agent.model;
+          saveSession(sessionRef.current);
+          setHeaderModel(agent.model);
+        }
+        pushNote(`🎭 Agent "${agent.name}" active${agent.model ? ` (model: ${agent.model})` : ''}\n${agent.description}`);
+        return true;
+      }
 
       case '/theme': {
         if (!args) {
