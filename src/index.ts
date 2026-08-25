@@ -77,10 +77,8 @@ program
     }
   });
 
-// Parse
-program.parse(process.argv);
-
-// Show help if no args
+// Parse — bare `oct` launches the interactive TUI directly (like opencode)
 if (process.argv.length <= 2) {
-  program.help();
+  process.argv.push('chat');
 }
+program.parse(process.argv);

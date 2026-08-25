@@ -115,7 +115,8 @@ async function updateDigest(router: Router, session: ConversationSession, config
 
 export function ChatApp({ router, session: initialSession, config, options }: ChatAppProps) {
   const { exit } = useApp();
-  const theme = getTheme(config.settings.theme);
+  const [themeName, setThemeName] = useState<string>(config.settings.theme || 'octapus');
+  const theme = getTheme(themeName);
 
   const [display, setDisplay] = useState<DisplayItem[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
@@ -447,7 +448,8 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         } else if (listThemeNames().includes(args)) {
           config.settings.theme = args;
           saveConfig(config);
-          pushNote(`✓ Theme switched to: ${args} (fully applied on next launch)`);
+          setThemeName(args);
+          pushNote(`✓ Theme switched to: ${args}`);
         } else {
           pushNote(`Unknown theme: ${args}. Available: ${listThemeNames().join(', ')}`);
         }
