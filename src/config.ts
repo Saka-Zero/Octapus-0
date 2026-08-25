@@ -22,13 +22,23 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yaml');
 const DEFAULT_CONFIG: Config = {
   providers: {
     groq: { apiKey: '', priority: 10, enabled: false },
+    cerebras: { apiKey: '', priority: 9, enabled: false },
     gemini: { apiKey: '', priority: 8, enabled: false },
+    sambanova: { apiKey: '', priority: 7, enabled: false },
     ollama: { baseURL: 'http://localhost:11434', priority: 5, enabled: false },
+    together: { apiKey: '', priority: 4, enabled: false },
     openrouter: { apiKey: '', priority: 3, enabled: false },
-    requesty: { apiKey: '', priority: 2, enabled: false }
+    novita: { apiKey: '', priority: 2, enabled: false },
+    requesty: { apiKey: '', priority: 1, enabled: false }
   },
   defaultModel: 'llama-3.1-70b-versatile',
-  fallbackModels: ['gemini-1.5-flash-latest', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+  fallbackModels: [
+    'llama-3.1-8b',
+    'Meta-Llama-3.1-70B-Instruct',
+    'gemini-1.5-flash-latest',
+    'llama-3.1-8b-instant',
+    'mixtral-8x7b-32768'
+  ],
   settings: {
     temperature: 0.7,
     maxTokens: 4096,

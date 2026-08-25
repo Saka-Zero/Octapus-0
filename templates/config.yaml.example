@@ -10,6 +10,14 @@ providers:
     priority: 10         # Highest priority (tried first)
     enabled: false       # Set true after adding apiKey
 
+  # Cerebras - Free tier, ultra fast inference
+  # Get key: https://cloud.cerebras.ai/
+  cerebras:
+    apiKey: ""           # csk-xxxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 9
+    enabled: false
+
   # Google Gemini - Free tier, 1.5M tokens/min
   # Get key: https://aistudio.google.com/apikey
   gemini:
@@ -18,12 +26,28 @@ providers:
     priority: 8
     enabled: false
 
+  # SambaNova - Free tier, fast inference
+  # Get key: https://cloud.sambanova.ai/
+  sambanova:
+    apiKey: ""           # xxxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 7
+    enabled: false
+
   # Ollama - Local models, unlimited, private
   # Run: ollama serve (default: http://localhost:11434)
   ollama:
     baseURL: "http://localhost:11434"
     priority: 5
-    enabled: true        # Enabled by default (no key needed)
+    enabled: false       # Set true + run ollama serve
+
+  # Together AI - Free tier ($1 free credit)
+  # Get key: https://api.together.xyz/
+  together:
+    apiKey: ""           # xxxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 4
+    enabled: false
 
   # OpenRouter - Access 100+ models, $1 free credit
   # Get key: https://openrouter.ai/keys
@@ -33,12 +57,20 @@ providers:
     priority: 3
     enabled: false
 
+  # Novita AI - Free tier available
+  # Get key: https://novita.ai/
+  novita:
+    apiKey: ""           # xxxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 2
+    enabled: false
+
   # Requesty - Aggregator, free tier available
   # Get key: https://requesty.ai/keys
   requesty:
     apiKey: ""           # sk-xxxxxxxxxxxxxxxx
     baseURL: ""          # Optional: custom endpoint
-    priority: 2
+    priority: 1
     enabled: false
 
 # Default model to use when none specified
@@ -46,6 +78,8 @@ defaultModel: "llama-3.1-70b-versatile"
 
 # Fallback models (tried in order if primary fails)
 fallbackModels:
+  - "llama-3.1-8b"
+  - "Meta-Llama-3.1-70B-Instruct"
   - "gemini-1.5-flash-latest"
   - "llama-3.1-8b-instant"
   - "mixtral-8x7b-32768"

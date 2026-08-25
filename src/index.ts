@@ -8,6 +8,10 @@ import { GeminiProvider } from './providers/gemini';
 import { OllamaProvider } from './providers/ollama';
 import { OpenRouterProvider } from './providers/openrouter';
 import { RequestyProvider } from './providers/requesty';
+import { CerebrasProvider } from './providers/cerebras';
+import { SambaNovaProvider } from './providers/sambanova';
+import { TogetherProvider } from './providers/together';
+import { NovitaProvider } from './providers/novita';
 import { createChatCommand } from './commands/chat';
 import { createConfigCommand } from './commands/config';
 import { createModelsCommand } from './commands/models';
@@ -24,9 +28,19 @@ function registerProviders(): void {
     router.register(new GroqProvider(config.providers.groq.apiKey, config.providers.groq.baseURL));
   }
 
+  // Cerebras
+  if (config.providers.cerebras?.enabled && config.providers.cerebras.apiKey) {
+    router.register(new CerebrasProvider(config.providers.cerebras.apiKey, config.providers.cerebras.baseURL));
+  }
+
   // Gemini
   if (config.providers.gemini?.enabled && config.providers.gemini.apiKey) {
     router.register(new GeminiProvider(config.providers.gemini.apiKey, config.providers.gemini.baseURL));
+  }
+
+  // SambaNova
+  if (config.providers.sambanova?.enabled && config.providers.sambanova.apiKey) {
+    router.register(new SambaNovaProvider(config.providers.sambanova.apiKey, config.providers.sambanova.baseURL));
   }
 
   // Ollama (no key needed)
@@ -34,9 +48,19 @@ function registerProviders(): void {
     router.register(new OllamaProvider(config.providers.ollama.baseURL));
   }
 
+  // Together
+  if (config.providers.together?.enabled && config.providers.together.apiKey) {
+    router.register(new TogetherProvider(config.providers.together.apiKey, config.providers.together.baseURL));
+  }
+
   // OpenRouter
   if (config.providers.openrouter?.enabled && config.providers.openrouter.apiKey) {
     router.register(new OpenRouterProvider(config.providers.openrouter.apiKey, config.providers.openrouter.baseURL));
+  }
+
+  // Novita
+  if (config.providers.novita?.enabled && config.providers.novita.apiKey) {
+    router.register(new NovitaProvider(config.providers.novita.apiKey, config.providers.novita.baseURL));
   }
 
   // Requesty

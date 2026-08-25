@@ -53,9 +53,13 @@ export function createChatCommand(router: Router): Command {
         }
         console.log();
         console.log(chalk.cyan('Get API keys:'));
-        console.log(chalk.gray('  Groq:      https://console.groq.com/keys'));
-        console.log(chalk.gray('  Gemini:    https://aistudio.google.com/apikey'));
+        console.log(chalk.gray('  Groq:       https://console.groq.com/keys'));
+        console.log(chalk.gray('  Cerebras:   https://cloud.cerebras.ai/'));
+        console.log(chalk.gray('  Gemini:     https://aistudio.google.com/apikey'));
+        console.log(chalk.gray('  SambaNova:  https://cloud.sambanova.ai/'));
+        console.log(chalk.gray('  Together:   https://api.together.xyz/'));
         console.log(chalk.gray('  OpenRouter: https://openrouter.ai/keys'));
+        console.log(chalk.gray('  Novita:     https://novita.ai/'));
         process.exit(1);
       }
 
