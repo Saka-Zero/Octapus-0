@@ -91,14 +91,15 @@ export function loadSession(sessionId?: string): ConversationSession | null {
 }
 
 /**
- * Save a conversation session
+ * Save a conversation session (atomic: tmp + rename prevents torn files
+ * when two processes or a crash interrupt the write).
  */
 export function saveSession(session: ConversationSession): void {
   ensureHistoryDir();
   const filePath = getSessionPath(session.id);
-  fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
-  
-  // Cleanup old sessions
+  const tmp = filePath + '.' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(session, null, 2));
+  fs.renameSync(tmp, filePath);
   cleanupOldSessions();
 }
 
@@ -289,22 +290,51 @@ export function clearAllHistory(): void {
 }
 
 /**
- * Cleanup old session files (keep last MAX_HISTORY_FILES)
+ * Cleanup old session files (keep last MAX_HISTORY_FILES) AND their
+ * satellite artifacts (shadow-git checkpoint repos, focus chains).
  */
 function cleanupOldSessions(): void {
   try {
-    const files = fs.readdirSync(HISTORY_DIR)
-      .filter(f => f.endsWith('.json'))
-      .sort()
-      .reverse();
-    
-    if (files.length > MAX_HISTORY_FILES) {
-      for (const file of files.slice(MAX_HISTORY_FILES)) {
-        fs.unlinkSync(path.join(HISTORY_DIR, file));
+    const files = fs.readdirSync(HISTORY_DIR).filter((f) => f.endsWith('.json')).sort().reverse();
+    const keptIds = new Set(files.slice(0, MAX_HISTORY_FILES).map((f) => f.replace(/\.json$/, '')));
+
+    for (const file of files.slice(MAX_HISTORY_FILES)) {
+      const id = file.replace(/\.json$/, '');
+      try { fs.unlinkSync(path.join(HISTORY_DIR, file)); } catch {}
+      removeSessionArtifacts(id);
+    }
+
+    // Second pass: orphaned artifacts whose session json is already gone
+    sweepOrphanedArtifacts(keptIds);
+  } catch {
+    // ignore
+  }
+}
+
+function appDataDir(sub: string): string {
+  return path.join(
+    process.env.HOME || process.env.USERPROFILE || '',
+    '.config', 'octapus', sub
+  );
+}
+
+function removeSessionArtifacts(id: string): void {
+  const safe = id.replace(/[^A-Za-z0-9_-]/g, '_');
+  try { fs.rmSync(appDataDir(path.join('checkpoints', safe)), { recursive: true, force: true }); } catch {}
+  try { fs.unlinkSync(path.join(appDataDir('focus'), `${safe}.md`)); } catch {}
+}
+
+function sweepOrphanedArtifacts(keptIds: Set<string>): void {
+  for (const sub of ['checkpoints', 'focus']) {
+    const dir = appDataDir(sub);
+    if (!fs.existsSync(dir)) continue;
+    for (const entry of fs.readdirSync(dir)) {
+      if (entry.startsWith('.')) continue; // shadow .git internals live inside per-session dirs
+      const id = entry.replace(/\.(md|json|)$/, '');
+      if (id && !keptIds.has(id)) {
+        try { fs.rmSync(path.join(dir, entry), { recursive: true, force: true }); } catch {}
       }
     }
-  } catch {
-    // Ignore errors
   }
 }
 

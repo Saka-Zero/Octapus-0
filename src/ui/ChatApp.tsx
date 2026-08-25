@@ -172,6 +172,9 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     }
   });
 
+  // Abort in-flight generation on unmount — prevents zombie token burn
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
+
   // ─── Core send flow ───────────────────────────────────────────────
   const sendToAI = async (prompt: string) => {
     setBusy(true);
@@ -463,10 +466,19 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           pushNote(`Agent auto-approve: ${config.settings.agentAutoApprove ? 'ON' : 'OFF'}`);
           return true;
         }
-        setAgentMode((v) => !v);
-        pushNote(agentMode
-          ? '🤖 Agent mode OFF.'
-          : '🤖 Agent mode ON — I can read/write files, run commands, search code. Sensitive actions ask first (/agent auto to skip).');
+        const next = !agentMode;
+        setAgentMode(next);
+        if (next && councilMode) {
+          // Mutually exclusive — agent wins, council disabled explicitly
+          setCouncilMode(false);
+          config.settings.councilMode = false;
+          saveConfig(config);
+          pushNote('🤖 Agent mode ON — council auto-disabled (mutually exclusive). /council to switch back.');
+        } else {
+          pushNote(next
+            ? '🤖 Agent mode ON — I can read/write files, run commands, search code. Sensitive actions ask first (/agent auto to skip).'
+            : '🤖 Agent mode OFF.');
+        }
         return true;
       }
 
@@ -475,9 +487,14 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         setCouncilMode(next);
         config.settings.councilMode = next;
         saveConfig(config);
-        pushNote(next
-          ? '🏛️ Council mode ON — every prompt goes to a round of ALL active specialists: independent analysis → cross-debate → synthesis into one super answer.'
-          : '💬 Council mode OFF — single specialist answers (faster).');
+        if (next && agentMode) {
+          setAgentMode(false);
+          pushNote('🏛️ Council mode ON — agent mode auto-disabled (mutually exclusive). /agent to switch back.');
+        } else {
+          pushNote(next
+            ? '🏛️ Council mode ON — every prompt goes to a round of ALL active specialists: independent analysis → cross-debate → synthesis into one super answer.'
+            : '💬 Council mode OFF — single specialist answers (faster).');
+        }
         return true;
       }
 
@@ -580,10 +597,13 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       }
 
       case '/compact': {
+        if (busy) { pushNote('⏳ Busy — /compact queued after current turn.'); queueRef.current.push('/compact'); return true; }
+        setBusy(true);
+        const snapshotMsgs = [...sessionRef.current.messages];
         pushNote('Compacting session…');
         void (async () => {
           try {
-            const msgs = sessionRef.current.messages.filter((m) => m.role !== 'system');
+            const msgs = snapshotMsgs.filter((m) => m.role !== 'system');
             if (msgs.length < 6) { pushNote('Session too short to compact.'); return; }
             const transcript = msgs.map((m) => `${m.role}: ${m.content.slice(0, 800)}`).join('\n').slice(0, 30000);
             let summary = '';
@@ -596,17 +616,28 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
               if (ev.type === 'text') summary += ev.text;
             }
             if (summary.trim().length > 50) {
-              sessionRef.current.digest = summary.trim();
-              const sys = sessionRef.current.messages.find((m) => m.role === 'system');
-              const recent = sessionRef.current.messages.filter((m) => m.role !== 'system').slice(-4);
-              sessionRef.current.messages = [...(sys ? [sys] : []), ...recent];
-              saveSession(sessionRef.current);
-              pushNote(`✓ Compacted: ${msgs.length} messages → digest + ${recent.length} recent kept. Context is fresh again.`);
+              // Reconcile instead of replace: keep messages that arrived DURING compaction
+              const cur = sessionRef.current;
+              const snapshotSet = new Set(snapshotMsgs);
+              const arrivedDuring = cur.messages.filter((m) => !snapshotSet.has(m));
+              const recentOld = cur.messages.filter((m) => m.role !== 'system').slice(-4);
+              const keptSet = new Set([...recentOld, ...arrivedDuring]);
+              cur.digest = summary.trim();
+              const sys = cur.messages.find((m) => m.role === 'system');
+              cur.messages = [...(sys ? [sys] : []), ...cur.messages.filter((m) => keptSet.has(m))];
+              saveSession(cur);
+              pushNote(`✓ Compacted: ${msgs.length} messages → digest. Context fresh again.`);
             } else {
               pushNote('Compact failed — summary empty.');
             }
           } catch (e) {
             pushNote(`Compact failed: ${e instanceof Error ? e.message : e}`);
+          } finally {
+            setBusy(false);
+            if (queueRef.current.length > 0) {
+              const next = queueRef.current.shift()!;
+              setTimeout(() => handleSubmit(next), 30);
+            }
           }
         })();
         return true;
@@ -872,7 +903,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           {'  │  '}{headerModel}
           {agentMode ? '  │  🤖 agent' : ''}
           {'  │  '}
-          {totals.tokensIn.toLocaleString()}→{totals.tokensOut.toLocaleString()} tok
+          {new Intl.NumberFormat('en-US').format(totals.tokensIn)}→{new Intl.NumberFormat('en-US').format(totals.tokensOut)} tok
           {'  │  '}
           <Text color={totals.cost === 0 ? theme.success : theme.warning}>{formatCost(totals.cost)}</Text>
         </Text>

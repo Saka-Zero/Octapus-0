@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import * as readline from 'readline';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Router } from '../router';
 import { loadConfig, saveConfig, maskApiKey, DEFAULT_SYSTEM_PROMPT } from '../config';
 import { createSpinner, formatCost, formatDuration, formatUsage, estimateTokens, calculateCost } from '../utils';
@@ -41,6 +43,7 @@ export function createChatCommand(router: Router): Command {
     .option('--no-stream', 'Disable streaming')
     .option('--no-fallback', 'Disable fallback to other providers')
     .option('--no-council', 'Skip multi-AI council deliberation (council is default-on)')
+    .option('-f, --prompt-file <path>', 'Read prompt from file (bypasses OS command-length limits)')
     .option('--new', 'Start a new conversation (clear history)')
     .option('--history', 'Show recent conversation history')
     .option('--sessions', 'List all conversation sessions')
@@ -157,6 +160,17 @@ export function createChatCommand(router: Router): Command {
       }
 
       const model = options.model || config.defaultModel;
+
+      // Prompt from file — bypasses Windows ~32K char command-line limit
+      let effectivePrompt = prompt;
+      if (options.promptFile) {
+        try {
+          effectivePrompt = fs.readFileSync(path.resolve(options.promptFile), 'utf8');
+        } catch (e) {
+          console.log(chalk.red(`Cannot read prompt file: ${e instanceof Error ? e.message : e}`));
+          process.exit(1);
+        }
+      }
       
       // Validate temperature and maxTokens
       if (options.temperature !== undefined) {
@@ -201,7 +215,7 @@ export function createChatCommand(router: Router): Command {
       session.model = model;
 
       // ===== INTERACTIVE MODE (no prompt provided) =====
-      if (!prompt) {
+      if (!effectivePrompt) {
         if (process.env.OCTAPUS_PLAIN === '1' || !process.stdin.isTTY) {
           // Plain readline fallback (minimal terminals / piped input): OCTAPUS_PLAIN=1 oct chat
           await startInteractiveMode(router, session, config, options);
@@ -209,12 +223,13 @@ export function createChatCommand(router: Router): Command {
           const { startTui } = await import('../ui/startTui');
           await startTui(router, session, config, options);
           console.log(chalk.gray('\nSession saved. Goodbye!'));
+          process.exit(0); // all persistence is sync — safe hard-exit (MCP children would otherwise hold the loop)
         }
         return;
       }
 
       // ===== SINGLE MESSAGE MODE =====
-      await sendMessage(router, session, prompt, config, options);
+      await sendMessage(router, session, effectivePrompt, config, options);
     });
 
   return cmd;

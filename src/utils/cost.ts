@@ -118,6 +118,9 @@ export function createUsage(inputText: string, outputText: string): TokenUsage {
   };
 }
 
+// Pinned locale so "13.755" never reads as a decimal on id-ID terminals
+const NUM_FMT = new Intl.NumberFormat('en-US');
+
 export function formatUsage(usage: TokenUsage): string {
-  return `${usage.input.toLocaleString()} → ${usage.output.toLocaleString()} (${usage.total.toLocaleString()} total)`;
+  return `${NUM_FMT.format(usage.input)} → ${NUM_FMT.format(usage.output)} (${NUM_FMT.format(usage.total)} total)`;
 }
