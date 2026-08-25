@@ -43,10 +43,13 @@ export class Router {
       }
     }
 
-    // Add any other enabled providers
+    // Add any other enabled providers (skip if not enabled)
     for (const provider of this.providers.values()) {
       if (!chain.includes(provider)) {
-        chain.push(provider);
+        const cfg = this.config.providers[provider.name];
+        if (cfg?.enabled) {
+          chain.push(provider);
+        }
       }
     }
 

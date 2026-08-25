@@ -18,6 +18,47 @@ export function createChatCommand(router: Router): Command {
     .option('--no-fallback', 'Disable fallback to other providers')
     .action(async (prompt, options) => {
       const config = loadConfig();
+      
+      // Check if any provider is enabled
+      const enabledProviders = Object.entries(config.providers)
+        .filter(([_, cfg]) => cfg.enabled)
+        .map(([name, cfg]) => ({ name, hasKey: !!cfg.apiKey || name === 'ollama' }));
+      
+      if (enabledProviders.length === 0) {
+        console.log(chalk.red('No providers enabled!'));
+        console.log();
+        console.log(chalk.cyan('Enable at least one provider:'));
+        console.log(chalk.gray('  octapus provider enable groq'));
+        console.log(chalk.gray('  octapus provider enable gemini'));
+        console.log(chalk.gray('  octapus provider enable ollama'));
+        console.log();
+        console.log(chalk.cyan('Then set your API key:'));
+        console.log(chalk.gray('  octapus config set providers.groq.apiKey "gsk_xxx"'));
+        process.exit(1);
+      }
+
+      // Check if any enabled provider has API key
+      const readyProviders = enabledProviders.filter(p => p.hasKey);
+      if (readyProviders.length === 0) {
+        const missingKeys = enabledProviders.filter(p => !p.hasKey).map(p => p.name);
+        console.log(chalk.red('Provider(s) enabled but API key missing: ' + missingKeys.join(', ')));
+        console.log();
+        console.log(chalk.cyan('Set your API key:'));
+        for (const name of missingKeys) {
+          if (name === 'ollama') {
+            console.log(chalk.gray('  Ollama needs to be running locally: ollama serve'));
+          } else {
+            console.log(chalk.gray(`  octapus config set providers.${name}.apiKey "your-key"`));
+          }
+        }
+        console.log();
+        console.log(chalk.cyan('Get API keys:'));
+        console.log(chalk.gray('  Groq:      https://console.groq.com/keys'));
+        console.log(chalk.gray('  Gemini:    https://aistudio.google.com/apikey'));
+        console.log(chalk.gray('  OpenRouter: https://openrouter.ai/keys'));
+        process.exit(1);
+      }
+
       const model = options.model || config.defaultModel;
       const spinner = createSpinner({ text: `Connecting to ${model}...` });
       

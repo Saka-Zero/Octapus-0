@@ -23,7 +23,7 @@ const DEFAULT_CONFIG: Config = {
   providers: {
     groq: { apiKey: '', priority: 10, enabled: false },
     gemini: { apiKey: '', priority: 8, enabled: false },
-    ollama: { baseURL: 'http://localhost:11434', priority: 5, enabled: true },
+    ollama: { baseURL: 'http://localhost:11434', priority: 5, enabled: false },
     openrouter: { apiKey: '', priority: 3, enabled: false },
     requesty: { apiKey: '', priority: 2, enabled: false }
   },
