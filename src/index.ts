@@ -17,6 +17,7 @@ import { createChatCommand } from './commands/chat';
 import { createConfigCommand } from './commands/config';
 import { createModelsCommand } from './commands/models';
 import { createProviderCommand } from './commands/provider';
+import { runSetup } from './commands/setup';
 
 const program = new Command();
 const config = loadConfig();
@@ -259,6 +260,15 @@ program.addCommand(createChatCommand(router));
 program.addCommand(createConfigCommand());
 program.addCommand(createModelsCommand(router));
 program.addCommand(createProviderCommand(router));
+
+// Interactive setup wizard
+program
+  .command('setup')
+  .alias('init')
+  .description('Interactive setup wizard — configure providers & API keys')
+  .action(async () => {
+    await runSetup(router);
+  });
 
 // Global options
 program
