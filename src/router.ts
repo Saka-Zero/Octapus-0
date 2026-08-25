@@ -128,7 +128,19 @@ export class Router {
       } catch (err) {
         lastError = err as Error;
         if (!quiet) {
-          console.log(chalk.gray(`  [${provider.name}] ${err instanceof Error ? err.message : String(err)}`));
+          // One clean dim line — never dump raw provider JSON (may contain
+          // quota bodies / internal ids) to the user's terminal
+          const raw = err instanceof Error ? err.message : String(err);
+          let short = raw.split('\n')[0];
+          try {
+            const bodyStart = raw.indexOf('{');
+            if (bodyStart >= 0) {
+              const j = JSON.parse(raw.slice(bodyStart));
+              short = j.error?.message || j.message || j.error || 'request failed';
+              if (typeof short !== 'string') short = JSON.stringify(short).slice(0, 100);
+            }
+          } catch { /* keep first line */ }
+          console.log(chalk.gray(`  ⚠ ${provider.name}: ${short.slice(0, 110)} → trying next`));
         }
         continue;
       }

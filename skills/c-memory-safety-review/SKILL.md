@@ -5,7 +5,7 @@
 -->
 
 ---
-name: c-review
+name: c-memory-safety-review
 description: Performs comprehensive C/C++ security review for memory corruption, integer overflows, race conditions, and platform-specific vulnerabilities. Use when auditing native C/C++ applications, reviewing daemons or services for memory safety, or hunting integer overflow / use-after-free / race conditions in userspace code.
 allowed-tools: Workflow AskUserQuestion Bash Read
 keywords: memory safety, buffer overflow, use after free, c code, c plus plus, pointer, double free

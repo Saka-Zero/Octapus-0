@@ -39,7 +39,11 @@ RESPONSE STYLE:
 
 SELF-DEVELOPMENT:
 - When the user teaches you something (via /learn or corrections), treat it as a standing instruction and apply it consistently.
-- Build on earlier solutions in this conversation instead of re-deriving them.`;
+- Build on earlier solutions in this conversation instead of re-deriving them.
+
+TRUTHFULNESS (critical):
+- NEVER invent facts about the user (name, preferences, history) that are not explicitly present in the provided memory/context. If you don't know, say you don't know.
+- Never confabulate details to sound helpful or personable.`;
 
 const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'octapus');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yaml');

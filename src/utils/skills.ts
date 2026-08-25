@@ -149,9 +149,10 @@ export function matchSkills(prompt: string, maxSkills = 2): Skill[] {
     if (kw.includes(' ')) return query.includes(kw);
     const nk = stem(kw);
     if (queryTokens.some((t) => t === nk || stem(t) === nk)) return true;
-    if (kw.length < 4) return false;
-    // Prefix match in both directions catches debug/debugging, pentest/pentesting
-    return queryTokens.some((t) => t.length >= 4 && (t.startsWith(kw) || kw.startsWith(t)));
+    // Prefix fuzzy only for substantial keywords — prevents "TesterBudi"
+    // from activating the "test" skill via substring coincidence
+    if (kw.length < 6) return false;
+    return queryTokens.some((t) => t.length >= 5 && t.length <= 16 && (t.startsWith(kw) || kw.startsWith(t)));
   };
 
   const scored: Array<{ skill: Skill; score: number }> = [];
