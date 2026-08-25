@@ -491,28 +491,32 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         {(item: DisplayItem, i: number) => (
           <Box key={i} flexDirection="column" marginTop={1}>
             {item.kind === 'user' && (
-              <Box>
-                <Text color={theme.userLabel} bold>{'You › '}</Text>
-                <Text color={theme.userText}>{item.text}</Text>
+              <Box paddingLeft={1}>
+                <Text color={theme.primary} bold>{'❯ '}</Text>
+                <Text color={theme.text}>{item.text}</Text>
               </Box>
             )}
             {item.kind === 'assistant' && (
-              <Box flexDirection="column">
-                <Text color={theme.aiLabel} bold>{'Octapus ›'}</Text>
-                <Text>{renderMarkdown(item.text)}</Text>
+              <Box flexDirection="column" paddingLeft={1}>
+                {renderMarkdown(item.text).split('\n').map((line, li) => (
+                  <Text key={li}>
+                    <Text color={theme.borderActive}>{'│ '}</Text>
+                    <Text color={theme.text}>{line.length ? line : ' '}</Text>
+                  </Text>
+                ))}
               </Box>
             )}
             {item.kind === 'note' && (
-              <Box paddingLeft={2}><Text dim italic>{item.text}</Text></Box>
+              <Box paddingLeft={3}><Text color={theme.textMuted} italic>{item.text}</Text></Box>
             )}
             {item.kind === 'error' && (
-              <Box paddingLeft={2}><Text color={theme.error}>{item.text}</Text></Box>
+              <Box paddingLeft={3}><Text color={theme.error}>{item.text}</Text></Box>
             )}
             {item.kind === 'diff' && (
-              <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
-                <Text color={theme.highlight} bold>{item.title}</Text>
+              <Box flexDirection="column" paddingLeft={3} borderStyle="round" borderColor={theme.border} paddingX={1}>
+                <Text color={theme.accent} bold>{item.title}</Text>
                 {item.lines.map((l, li) => (
-                  <Text key={li} color={l.startsWith('+') ? theme.success : l.startsWith('-') ? theme.error : undefined}>
+                  <Text key={li} color={l.startsWith('+') ? theme.diffAdded : l.startsWith('-') ? theme.diffRemoved : theme.textMuted}>
                     {l}
                   </Text>
                 ))}
@@ -522,26 +526,43 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         )}
       </Static>
 
-      {/* Header */}
-      <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} marginTop={display.length === 0 ? 0 : 1}>
+      {/* ASCII welcome — first launch only */}
+      {display.length === 0 && (
+        <Box flexDirection="column" alignItems="center" marginBottom={0}>
+          <Text color={theme.primary} bold>{'    ___  ___ _ __ __ ___ _    ___ '}</Text>
+          <Text color={theme.primary} bold>{"   / _ \\|_  ) | '_ \\_ ) | |  / _ \\"}</Text>
+          <Text color={theme.primary} bold>{'  | (_) |/ /| | | | / /| |_| (_) |'}</Text>
+          <Text color={theme.primary} bold>{'   \\___//___|_|_|__/___|____\\___/ '}</Text>
+          <Text color={theme.textMuted}> multi-provider AI agent · esc interrupts · /help commands</Text>
+        </Box>
+      )}
+
+      {/* Slim header */}
+      <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={display.length === 0 ? 0 : 1}>
         <Text>
-          <Text color={theme.accent} bold>🐙 Octapus</Text>
-          <Text dim> multi-provider AI CLI{agentMode ? ' ' : ''}{agentMode && <Text color={theme.warn} bold>[AGENT]</Text>}</Text>
+          <Text color={theme.primary} bold>octapus</Text>
+          <Text color={theme.textMuted}> v0.1.0</Text>
+          {agentMode && <Text color={theme.warning} bold> · agent</Text>}
+          <Text color={theme.textMuted}>{'  │  '}</Text>
+          <Text color={theme.accent}>{headerModel}</Text>
+          <Text color={theme.textMuted}>
+            {'  │  '}mem {memoryCount}
+            {'  │  '}prov {enabledCount}
+            {'  │  '}ssn …{headerSessionId.slice(-8)}
+          </Text>
         </Text>
-        <Text dim>
-          model: <Text color={theme.highlight}>{headerModel}</Text>
-          {'  │  '}session: <Text color={theme.highlight}>{headerSessionId}</Text>
-          {'  │  '}memory: <Text color={theme.highlight}>{memoryCount}</Text>
-          {'  │  '}providers: <Text color={theme.highlight}>{enabledCount}</Text>
-        </Text>
-        <Text dim>/help commands · /models picker · /agent tools · esc interrupts</Text>
       </Box>
 
       {/* Streaming */}
       {(thinking || streaming !== null) && (
-        <Box flexDirection="column" marginTop={1} paddingLeft={2}>
-          {thinking && <Spinner label="Thinking… (esc to interrupt)" color={theme.accent} />}
-          {streaming !== null && <Text>{renderMarkdown(streaming)}</Text>}
+        <Box flexDirection="column" marginTop={1} paddingLeft={1}>
+          {thinking && <Spinner label="thinking… (esc interrupts)" color={theme.accent} />}
+          {streaming !== null && renderMarkdown(streaming).split('\n').map((line, li) => (
+            <Text key={li}>
+              <Text color={theme.borderActive}>{'│ '}</Text>
+              <Text color={theme.text}>{line.length ? line : ' '}</Text>
+            </Text>
+          ))}
         </Box>
       )}
 
@@ -593,7 +614,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       {!pickerOpen && !sessionPickerOpen && !pendingApproval && (
         <Box marginTop={1}>
           <TextInput
-            placeholder={busy ? (queueRef.current.length ? `queued: ${queueRef.current.length}` : 'esc to interrupt…') : 'Type a message… (/help for commands)'}
+            placeholder={busy ? (queueRef.current.length ? `queued: ${queueRef.current.length}` : 'esc interrupts…') : 'Type a message… (/help)'}
             disabled={busy}
             history={inputHistory}
             onSubmit={handleSubmit}
@@ -601,17 +622,17 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
-      {/* Status bar */}
-      <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
-        <Text dim>
+      {/* Minimal status line */}
+      <Box>
+        <Text color={theme.textMuted}>
           <Text color={theme.success}>● </Text>
           {lastProviderRef.current || 'ready'}
           {'  │  '}{headerModel}
-          {agentMode ? `  │  ${agentMode ? '🤖 agent' : ''}` : ''}
-        </Text>
-        <Text dim>
+          {agentMode ? '  │  🤖 agent' : ''}
+          {'  │  '}
           {totals.tokensIn.toLocaleString()}→{totals.tokensOut.toLocaleString()} tok
-          {'  │  '}<Text color={totals.cost === 0 ? theme.success : theme.warn}>{formatCost(totals.cost)}</Text>
+          {'  │  '}
+          <Text color={totals.cost === 0 ? theme.success : theme.warning}>{formatCost(totals.cost)}</Text>
         </Text>
       </Box>
     </Box>
