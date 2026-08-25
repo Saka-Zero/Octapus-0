@@ -8,6 +8,7 @@ import { matchSkills, formatSkillsForPrompt, listSkills } from '../utils/skills'
 import { DEFAULT_SYSTEM_PROMPT } from '../config';
 import { renderMarkdown } from './markdown';
 import { TextInput } from './TextInput';
+import { ModelPicker } from './ModelPicker';
 
 interface ChatAppProps {
   router: Router;
@@ -105,6 +106,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const [streaming, setStreaming] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const sessionRef = useRef<ConversationSession>(initialSession);
   const [headerModel, setHeaderModel] = useState(initialSession.model);
@@ -238,6 +240,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/clear             Clear ALL history & start new session',
           '/new               Start new session (keep old in scrollback)',
           '/model [name]      Show or change model',
+          '/models            Interactive model picker (search + arrows)',
           '/memory            Show long-term memory facts',
           '/remember <k> <v>  Store a fact permanently',
           '/forget <key>      Delete a memory fact',
@@ -293,6 +296,10 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         pushNote('✓ New session started.');
         return true;
 
+      case '/models':
+        setPickerOpen(true);
+        return true;
+
       case '/model': {
         if (args) {
           sessionRef.current.model = args;
@@ -311,7 +318,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           pushNote(
             `Current model: ${sessionRef.current.model}\n` +
             (lines.length ? `\nAvailable:\n${lines.join('\n')}\n` : '') +
-            `\nUsage: /model <model-name>`
+            `\nUsage: /model <name> or /models for interactive picker`
           );
         }
         return true;
@@ -451,15 +458,35 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
+      {/* Model picker overlay */}
+      {pickerOpen && (
+        <Box marginTop={1}>
+          <ModelPicker
+            router={router}
+            currentModel={headerModel}
+            onSelect={(id) => {
+              sessionRef.current.model = id;
+              saveSession(sessionRef.current);
+              setHeaderModel(id);
+              setPickerOpen(false);
+              pushNote(`✓ Model changed to: ${id}`);
+            }}
+            onClose={() => setPickerOpen(false)}
+          />
+        </Box>
+      )}
+
       {/* Input */}
-      <Box marginTop={1}>
-        <TextInput
-          placeholder={busy ? '' : 'Type a message… (/help for commands)'}
-          disabled={busy}
-          history={inputHistory}
-          onSubmit={handleSubmit}
-        />
-      </Box>
+      {!pickerOpen && (
+        <Box marginTop={1}>
+          <TextInput
+            placeholder={busy ? '' : 'Type a message… (/help for commands)'}
+            disabled={busy}
+            history={inputHistory}
+            onSubmit={handleSubmit}
+          />
+        </Box>
+      )}
 
       {/* Status bar */}
       <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
