@@ -12,6 +12,7 @@ import { ModelPicker } from './ModelPicker';
 import { SessionPicker } from './SessionPicker';
 import { runAgentTurn } from '../agent';
 import { setPlanMode, isPlanMode } from '../tools';
+import { listCheckpoints, restoreCheckpoint } from '../checkpoints';
 import { getTheme, listThemeNames } from './theme';
 import { execSync } from 'child_process';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS, Domain } from '../utils/roles';
@@ -247,7 +248,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       });
 
       if (agentMode) {
-        const result = await runAgentTurn(router, messages, model, config, { ...options, signal: controller.signal, domain }, {
+        const result = await runAgentTurn(router, messages, model, config, { ...options, signal: controller.signal, domain, sessionId: sessionRef.current.id }, {
           onText: (chunk) => {
             if (!flushTimer) { setThinking(false); startFlusher(); }
             streamText += chunk;
@@ -389,6 +390,8 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/learn <lesson>    Teach me a lesson permanently',
           '/digest            Show rolling conversation digest',
           '/compact           Summarize session → free up context window',
+          '/checkpoints       List auto-saved workspace snapshots',
+          '/restore <n>       Restore files to checkpoint n',
           '/plugins           List loaded plugins',
           '/theme [name]      Switch theme (' + listThemeNames().join(', ') + ')',
           '/copy              Copy last AI response to clipboard'
@@ -617,6 +620,36 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         pushNote(next
           ? '📋 PLAN MODE ON — research only. I will investigate, then present a numbered plan for your approval before touching anything.'
           : '🔨 PLAN MODE OFF — act mode. Full toolset unlocked.');
+        return true;
+      }
+
+      case '/checkpoints': {
+        pushNote('Loading checkpoints…');
+        void (async () => {
+          const cps = await listCheckpoints(sessionRef.current.id, process.cwd());
+          if (cps.length === 0) {
+            pushNote('No checkpoints yet — they are created automatically after agent file writes/commands.');
+          } else {
+            const lines = cps.map((c, i) => `[${cps.length - i}] ${c.hash.slice(0, 8)} ${c.date.slice(0, 19)} — ${c.label.slice(0, 60)}`);
+            pushNote(`Checkpoints (newest first):\n${lines.join('\n')}\n\nRestore: /restore <number>  e.g. /restore 1`);
+          }
+        })();
+        return true;
+      }
+
+      case '/restore': {
+        const num = parseInt(args, 10);
+        if (!args || isNaN(num)) { pushNote('Usage: /restore <number> (see /checkpoints)'); return true; }
+        pushNote('Restoring…');
+        void (async () => {
+          const cps = await listCheckpoints(sessionRef.current.id, process.cwd());
+          // Displayed newest-first: [1] = newest
+          const target = cps[cps.length - num];
+          if (!target) { pushNote(`Checkpoint #${num} not found.`); return; }
+          const r = await restoreCheckpoint(sessionRef.current.id, process.cwd(), target.hash);
+          if (r.ok) pushNote(`⏪ ${r.output}`);
+          else setDisplay((d) => [...d, { kind: 'error', text: `✗ ${r.output}` }]);
+        })();
         return true;
       }
 

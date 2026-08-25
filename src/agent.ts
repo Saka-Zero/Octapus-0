@@ -2,6 +2,7 @@ import { Router } from './router';
 import { Message, ToolCall } from './providers';
 import { AGENT_TOOLS, executeTool, notifyAfterTool, ToolApproval, isPlanMode, setPlanMode, PLAN_ALLOWED } from './tools';
 import { pluginBeforeRequest } from './plugins';
+import { createCheckpoint } from './checkpoints';
 
 const MAX_ITERATIONS = 15;
 
@@ -122,6 +123,12 @@ export async function runAgentTurn(
       try {
         notifyAfterTool(call.function.name, JSON.parse(call.function.arguments || '{}'), result);
       } catch { /* plugin errors never break the loop */ }
+
+      // Shadow-git checkpoint after every successful mutating action
+      if (result.ok && (call.function.name === 'write_file' || call.function.name === 'run_command')) {
+        const sessionId = options.sessionId || 'default';
+        void createCheckpoint(sessionId, process.cwd(), `${call.function.name}: ${argsPreview.slice(0, 120)}`);
+      }
 
       messages.push({
         role: 'tool',
