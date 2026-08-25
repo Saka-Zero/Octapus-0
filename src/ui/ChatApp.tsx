@@ -19,6 +19,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { formatProjectContext } from '../utils/projectContext';
 import { listCustomAgents, getCustomAgent, CustomAgent } from '../utils/customAgents';
+import { loadCustomCommands, expandCommand } from '../utils/customCommands';
+import { loadPlugins, pluginSystemPrompt, getPluginCount } from '../plugins';
 
 interface ChatAppProps {
   router: Router;
@@ -81,6 +83,8 @@ function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: s
   }
   if (activeSkillText) parts.push(activeSkillText);
   if (persona) parts.push(persona);
+  const pluginCtx = pluginSystemPrompt();
+  if (pluginCtx) parts.push(pluginCtx);
   return parts.join('\n\n');
 }
 
@@ -378,6 +382,8 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/use <name>        Activate a custom agent (/use off to exit)',
           '/learn <lesson>    Teach me a lesson permanently',
           '/digest            Show rolling conversation digest',
+          '/compact           Summarize session → free up context window',
+          '/plugins           List loaded plugins',
           '/theme [name]      Switch theme (' + listThemeNames().join(', ') + ')',
           '/copy              Copy last AI response to clipboard'
         ].join('\n'));
@@ -552,6 +558,49 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         return true;
       }
 
+      case '/plugins': {
+        const all = loadPlugins();
+        if (all.length === 0) {
+          pushNote('No plugins loaded. Drop .js files into ~/.config/octapus/plugins/\nHooks: onBeforeToolCall(name,args)→{block,reason,args} · onAfterToolCall · onSystemPrompt()→string · onBeforeRequest(opts)→opts');
+        } else {
+          pushNote(`Plugins (${all.length}):\n${all.map((p) => `- ${p.name}`).join('\n')}`);
+        }
+        return true;
+      }
+
+      case '/compact': {
+        pushNote('Compacting session…');
+        void (async () => {
+          try {
+            const msgs = sessionRef.current.messages.filter((m) => m.role !== 'system');
+            if (msgs.length < 6) { pushNote('Session too short to compact.'); return; }
+            const transcript = msgs.map((m) => `${m.role}: ${m.content.slice(0, 800)}`).join('\n').slice(0, 30000);
+            let summary = '';
+            for await (const ev of router.chat({
+              model: sessionRef.current.model,
+              messages: [{ role: 'user', content: `Summarize this conversation into a dense digest preserving: user facts, decisions, technical details, open threads. Drop pleasantries.\n\n${transcript}` }],
+              options: { model: sessionRef.current.model, maxTokens: 1500, temperature: 0.2, quiet: true },
+              fallbackModels: config.fallbackModels || []
+            })) {
+              if (ev.type === 'text') summary += ev.text;
+            }
+            if (summary.trim().length > 50) {
+              sessionRef.current.digest = summary.trim();
+              const sys = sessionRef.current.messages.find((m) => m.role === 'system');
+              const recent = sessionRef.current.messages.filter((m) => m.role !== 'system').slice(-4);
+              sessionRef.current.messages = [...(sys ? [sys] : []), ...recent];
+              saveSession(sessionRef.current);
+              pushNote(`✓ Compacted: ${msgs.length} messages → digest + ${recent.length} recent kept. Context is fresh again.`);
+            } else {
+              pushNote('Compact failed — summary empty.');
+            }
+          } catch (e) {
+            pushNote(`Compact failed: ${e instanceof Error ? e.message : e}`);
+          }
+        })();
+        return true;
+      }
+
       case '/theme': {
         if (!args) {
           pushNote(`Current theme: ${theme.name}. Available: ${listThemeNames().join(', ')}\nUsage: /theme <name>`);
@@ -579,9 +628,19 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         return true;
       }
 
-      default:
+      default: {
+        // Custom commands from ~/.config/octapus/commands/*.md
+        const cmdName = cmd.slice(1);
+        const custom = loadCustomCommands().find((c) => c.name === cmdName);
+        if (custom) {
+          const expanded = expandCommand(custom, args);
+          pushNote(`⚡ /${custom.name}${args ? ` ${args}` : ''}`);
+          void sendToAI(expanded);
+          return true;
+        }
         pushNote(`Unknown command: ${cmd} — type /help`);
         return true;
+      }
     }
   };
 

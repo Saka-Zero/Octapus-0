@@ -1,6 +1,7 @@
 import { Router } from './router';
 import { Message, ToolCall } from './providers';
-import { AGENT_TOOLS, executeTool, ToolApproval } from './tools';
+import { AGENT_TOOLS, executeTool, notifyAfterTool, ToolApproval } from './tools';
+import { pluginBeforeRequest } from './plugins';
 
 const MAX_ITERATIONS = 15;
 
@@ -95,6 +96,9 @@ export async function runAgentTurn(
       const result = await executeTool(call.function.name, call.function.arguments, process.cwd(), cb.approval);
       cb.onToolStart(call.function.name, argsPreview);
       cb.onToolResult(call.function.name, result.ok, result.output, result.diff);
+      try {
+        notifyAfterTool(call.function.name, JSON.parse(call.function.arguments || '{}'), result);
+      } catch { /* plugin errors never break the loop */ }
 
       messages.push({
         role: 'tool',

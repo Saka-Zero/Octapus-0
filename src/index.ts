@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { loadConfig } from './config';
 import { Router } from './router';
 import { BUILTIN_PROVIDERS, createBuiltinProvider, OpenAICompatibleProvider } from './providers';
+import { setPermissions } from './tools';
 import { createChatCommand } from './commands/chat';
 import { createConfigCommand } from './commands/config';
 import { createModelsCommand } from './commands/models';
@@ -32,6 +33,9 @@ function registerProviders(): void {
 }
 
 registerProviders();
+
+// Apply permission policy from config (allow/ask/deny per tool)
+if (config.permissions) setPermissions(config.permissions);
 
 // CLI Setup
 program

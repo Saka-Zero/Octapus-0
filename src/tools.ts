@@ -3,6 +3,19 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { Tool } from './providers';
 import { researchQuery, webFetch } from './web';
+import { loadPlugins, pluginBeforeRequest, ToolHookResult } from './plugins';
+
+/** Permission action from config: allow (skip approval) | ask | deny */
+export type PermissionAction = 'allow' | 'ask' | 'deny';
+export type PermissionMap = Partial<Record<string, PermissionAction>>;
+
+let activePermissions: PermissionMap = {};
+export function setPermissions(map: PermissionMap): void {
+  activePermissions = map || {};
+}
+export function getPermissions(): PermissionMap {
+  return activePermissions;
+}
 
 export interface ToolResult {
   ok: boolean;
@@ -223,6 +236,28 @@ export async function executeTool(
     return { ok: false, output: `Invalid JSON arguments: ${argsJson.slice(0, 200)}` };
   }
 
+  // Plugin veto/mutation hook — runs before permission checks
+  for (const plugin of loadPlugins()) {
+    try {
+      const res: ToolHookResult | void = plugin.onBeforeToolCall?.(name, args);
+      if (res?.block) {
+        return { ok: false, output: `Blocked by plugin "${plugin.name}": ${res.reason || 'policy'}` };
+      }
+      if (res?.args) args = res.args;
+    } catch (e) {
+      console.warn(`⚠ plugin ${plugin.name} onBeforeToolCall error: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  // Permission map from config: deny blocks outright, allow skips approval,
+  // ask falls through to the approve callback
+  const perm = activePermissions[name];
+  let effectiveApprove = approve;
+  if (perm === 'deny') {
+    return { ok: false, output: `BLOCKED: tool "${name}" is denied by permissions config.` };
+  }
+  if (perm === 'allow') effectiveApprove = undefined;
+
   switch (name) {
     case 'read_file':
       return doReadFile(String(args.path || ''));
@@ -246,6 +281,17 @@ export async function executeTool(
       );
     default:
       return { ok: false, output: `Unknown tool: ${name}` };
+  }
+}
+
+/** Fire onAfterToolCall across plugins (fire-and-forget safe) */
+export function notifyAfterTool(name: string, args: Record<string, unknown>, result: ToolResult): void {
+  for (const plugin of loadPlugins()) {
+    try {
+      plugin.onAfterToolCall?.(name, args, result);
+    } catch {
+      // plugin errors never break the loop
+    }
   }
 }
 

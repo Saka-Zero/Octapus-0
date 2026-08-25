@@ -7,6 +7,8 @@ export interface Config {
   providers: Record<string, ProviderConfig & { priority: number; enabled: boolean }>;
   defaultModel: string;
   fallbackModels: string[];
+  /** Per-tool permission policy: allow (skip approval) | ask | deny */
+  permissions?: Record<string, 'allow' | 'ask' | 'deny'>;
   settings: {
     temperature: number;
     maxTokens: number;
@@ -47,6 +49,17 @@ TRUTHFULNESS (critical):
 
 const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'octapus');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yaml');
+
+/** Safe default permission profile: reads/search allowed, writes/commands ask */
+export const DEFAULT_PERMISSIONS: Record<string, 'allow' | 'ask' | 'deny'> = {
+  read_file: 'allow',
+  list_dir: 'allow',
+  search_files: 'allow',
+  web_search: 'allow',
+  web_fetch: 'ask',
+  write_file: 'ask',
+  run_command: 'ask'
+};
 
 const DEFAULT_CONFIG: Config = {
   providers: {
@@ -91,7 +104,8 @@ const DEFAULT_CONFIG: Config = {
     // BlockRun free NVIDIA tier — zero auth
     blockrun: { baseURL: 'https://blockrun.ai/api/v1', apiKey: '', priority: 2, enabled: true, role: 'fast' }
   },
-  defaultModel: 'llama-3.3-70b-versatile',
+  defaultModel: 'x-preview-f-free',
+  permissions: { ...DEFAULT_PERMISSIONS },
   fallbackModels: [
     'llama-3.1-8b-instant',
     'Meta-Llama-3.1-70B-Instruct',
