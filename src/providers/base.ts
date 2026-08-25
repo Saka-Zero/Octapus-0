@@ -41,10 +41,15 @@ export interface Provider {
   name: string;
   models: string[];
   priority: number;
-  chat(messages: Message[], options: ChatOptions): AsyncIterable<string>;
+  chat(messages: Message[], options: ChatOptions): AsyncIterable<StreamEvent>;
   validateKey(): Promise<boolean>;
   getModels(): Promise<string[]>;
 }
+
+/** Streaming events emitted by providers */
+export type StreamEvent =
+  | { type: 'text'; text: string }
+  | { type: 'tool_calls'; calls: ToolCall[] };
 
 export interface ProviderConfig {
   apiKey?: string;

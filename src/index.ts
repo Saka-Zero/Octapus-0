@@ -1,18 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, saveConfig } from './config';
+import { loadConfig } from './config';
 import { Router } from './router';
-import { GroqProvider } from './providers/groq';
-import { GeminiProvider } from './providers/gemini';
-import { OllamaProvider } from './providers/ollama';
-import { OpenRouterProvider } from './providers/openrouter';
-import { RequestyProvider } from './providers/requesty';
-import { CerebrasProvider } from './providers/cerebras';
-import { SambaNovaProvider } from './providers/sambanova';
-import { TogetherProvider } from './providers/together';
-import { NovitaProvider } from './providers/novita';
-import { OpenAICompatibleProvider } from './providers/openai-compatible';
+import { BUILTIN_PROVIDERS, createBuiltinProvider, OpenAICompatibleProvider } from './providers';
 import { createChatCommand } from './commands/chat';
 import { createConfigCommand } from './commands/config';
 import { createModelsCommand } from './commands/models';
@@ -25,212 +16,18 @@ const router = new Router();
 
 // Register providers based on config
 function registerProviders(): void {
-  // Groq
-  if (config.providers.groq?.enabled && config.providers.groq.apiKey) {
-    router.register(new GroqProvider(config.providers.groq.apiKey, config.providers.groq.baseURL));
-  }
-
-  // Cerebras
-  if (config.providers.cerebras?.enabled && config.providers.cerebras.apiKey) {
-    router.register(new CerebrasProvider(config.providers.cerebras.apiKey, config.providers.cerebras.baseURL));
-  }
-
-  // Gemini
-  if (config.providers.gemini?.enabled && config.providers.gemini.apiKey) {
-    router.register(new GeminiProvider(config.providers.gemini.apiKey, config.providers.gemini.baseURL));
-  }
-
-  // SambaNova
-  if (config.providers.sambanova?.enabled && config.providers.sambanova.apiKey) {
-    router.register(new SambaNovaProvider(config.providers.sambanova.apiKey, config.providers.sambanova.baseURL));
-  }
-
-  // Ollama (no key needed)
-  if (config.providers.ollama?.enabled) {
-    router.register(new OllamaProvider(config.providers.ollama.baseURL));
-  }
-
-  // Together
-  if (config.providers.together?.enabled && config.providers.together.apiKey) {
-    router.register(new TogetherProvider(config.providers.together.apiKey, config.providers.together.baseURL));
-  }
-
-  // OpenRouter
-  if (config.providers.openrouter?.enabled && config.providers.openrouter.apiKey) {
-    router.register(new OpenRouterProvider(config.providers.openrouter.apiKey, config.providers.openrouter.baseURL));
-  }
-
-  // Novita
-  if (config.providers.novita?.enabled && config.providers.novita.apiKey) {
-    router.register(new NovitaProvider(config.providers.novita.apiKey, config.providers.novita.baseURL));
-  }
-
-  // Requesty
-  if (config.providers.requesty?.enabled && config.providers.requesty.apiKey) {
-    router.register(new RequestyProvider(config.providers.requesty.apiKey, config.providers.requesty.baseURL));
-  }
-
-  // ─── Free-tier providers (OpenAI-compatible) ─────────────────────
-  const freeProviders: Array<{
-    name: string;
-    baseURL: string;
-    priority: number;
-    models: string[];
-    needsKey: boolean;
-  }> = [
-    {
-      name: 'github-models',
-      baseURL: 'https://models.inference.ai.azure.com',
-      priority: 6,
-      needsKey: true,
-      models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'Meta-Llama-3.1-405B-Instruct', 'Phi-4']
-    },
-    {
-      name: 'mistral',
-      baseURL: 'https://api.mistral.ai/v1',
-      priority: 6,
-      needsKey: true,
-      models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest', 'ministral-8b-latest']
-    },
-    {
-      name: 'nvidia',
-      baseURL: 'https://integrate.api.nvidia.com/v1',
-      priority: 5,
-      needsKey: true,
-      models: ['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct', 'deepseek-ai/deepseek-r1', 'qwen/qwen2.5-coder-32b-instruct']
-    },
-    {
-      name: 'cohere',
-      baseURL: 'https://api.cohere.ai/compatibility/v1',
-      priority: 5,
-      needsKey: true,
-      models: ['command-r-plus-08-2024', 'command-r-08-2024', 'command-r7b-12-2024']
-    },
-    {
-      name: 'huggingface',
-      baseURL: 'https://router.huggingface.co/v1',
-      priority: 4,
-      needsKey: true,
-      models: ['Qwen/Qwen2.5-72B-Instruct', 'meta-llama/Llama-3.3-70B-Instruct', 'deepseek-ai/DeepSeek-V3']
-    },
-    {
-      name: 'zhipu',
-      baseURL: 'https://open.bigmodel.cn/api/paas/v4',
-      priority: 3,
-      needsKey: true,
-      models: ['glm-4-flash', 'glm-4-plus', 'glm-4-air', 'codegeex-4']
-    },
-    {
-      name: 'siliconflow',
-      baseURL: 'https://api.siliconflow.cn/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['Qwen/Qwen2.5-7B-Instruct', 'THUDM/glm-4-9b-chat', 'deepseek-ai/DeepSeek-V3']
-    },
-    {
-      name: 'modelscope',
-      baseURL: 'https://api-inference.modelscope.cn/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['Qwen/Qwen2.5-72B-Instruct', 'Qwen/Qwen2.5-Coder-32B-Instruct']
-    },
-    {
-      // Zero-setup: works without any API key
-      name: 'pollinations',
-      baseURL: 'https://text.pollinations.ai/openai',
-      priority: 1,
-      needsKey: false,
-      models: ['openai', 'openai-fast', 'mistral', 'llama', 'qwen-coder']
-    },
-    {
-      // Local LM Studio server — no key, fully offline
-      name: 'lmstudio',
-      baseURL: 'http://localhost:1234/v1',
-      priority: 7,
-      needsKey: false,
-      models: []
-    },
-    {
-      // Cloudflare Workers AI — 10k neurons/day free. User must set their
-      // account ID into the baseURL: oct config set providers.cloudflare.baseURL ...
-      name: 'cloudflare',
-      baseURL: 'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['@cf/meta/llama-3.1-8b-instruct', '@cf/qwen/qwen2.5-coder-32b-instruct', '@cf/mistralai/mistral-small-3.1-24b-instruct']
-    },
-    {
-      // OVH AI Endpoints — free tier with rate limits
-      name: 'ovh',
-      baseURL: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['Meta-Llama-3_1-8B-Instruct', 'Qwen2_5-72B-Instruct', 'Mistral-Nemo-Instruct-2407']
-    },
-    {
-      // Tencent Hunyuan — hunyuan-lite is free forever
-      name: 'hunyuan',
-      baseURL: 'https://api.hunyuan.cloud.tencent.com/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['hunyuan-lite', 'hunyuan-turbo', 'hunyuan-standard']
-    },
-    {
-      // Baidu Qianfan v2 — ernie-speed/lite are free
-      name: 'qianfan',
-      baseURL: 'https://qianfan.baidubce.com/v2',
-      priority: 2,
-      needsKey: true,
-      models: ['ernie-speed-8k', 'ernie-lite-8k', 'ernie-speed-128k']
-    },
-    {
-      // Chutes.ai — free tier (~200 req/day)
-      name: 'chutes',
-      baseURL: 'https://api.chutes.ai/app/api/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['deepseek-ai/DeepSeek-R1', 'Qwen/Qwen2.5-72B-Instruct', 'meta-llama/Llama-3.3-70B-Instruct']
-    },
-    {
-      // Venice AI — privacy-focused, free tier available
-      name: 'venice',
-      baseURL: 'https://api.venice.ai/api/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['llama-3.3-70b', 'qwen-2.5-qwq-32b', 'dolphin-mixtral-8x22b']
-    },
-    {
-      // Scaleway Generative APIs — free tier
-      name: 'scaleway',
-      baseURL: 'https://api.scaleway.ai/v1',
-      priority: 2,
-      needsKey: true,
-      models: ['qwen2.5-72b-instruct', 'llama-3.1-8b-instruct', 'mistral-nemo-instruct-2407']
-    }
-  ];
-
-  for (const fp of freeProviders) {
-    const cfg = config.providers[fp.name];
-    if (!cfg?.enabled) continue;
-    if (fp.needsKey && !cfg.apiKey) continue;
-    router.register(
-      new OpenAICompatibleProvider(
-        fp.name,
-        cfg.apiKey || 'none',
-        cfg.baseURL || fp.baseURL,
-        cfg.priority ?? fp.priority,
-        fp.models
-      )
-    );
+  // Built-in providers (all OpenAI-compatible via the unified engine)
+  for (const def of BUILTIN_PROVIDERS) {
+    const provider = createBuiltinProvider(def, (config.providers as any)[def.name]);
+    if (provider) router.register(provider);
   }
 
   // Register any custom providers (added via `provider add`)
-  const knownProviders = ['groq', 'cerebras', 'gemini', 'sambanova', 'ollama', 'together', 'openrouter', 'novita', 'requesty', ...freeProviders.map(f => f.name)];
+  const knownProviders = new Set(BUILTIN_PROVIDERS.map((b) => b.name));
   for (const [name, cfg] of Object.entries(config.providers)) {
-    if (knownProviders.includes(name)) continue;
-    if (!cfg?.enabled || !cfg.apiKey || !cfg.baseURL) continue;
-    // Create a generic OpenAI-compatible provider
-    router.register(new OpenAICompatibleProvider(name, cfg.apiKey, cfg.baseURL, cfg.priority ?? 1));
+    if (knownProviders.has(name)) continue;
+    if (!cfg?.enabled || !cfg.baseURL) continue;
+    router.register(new OpenAICompatibleProvider(name, cfg.apiKey || 'none', cfg.baseURL, cfg.priority ?? 1));
   }
 }
 
@@ -240,17 +37,17 @@ registerProviders();
 program
   .name('octapus')
   .alias('oct')
-  .description('Octapus-0: Multi-provider AI CLI with smart fallback')
+  .description('Octapus-0: Multi-provider AI CLI with smart fallback + agent mode')
   .version('0.1.0')
   .addHelpText('after', `
 Examples:
   $ octapus chat "Hello, world!"
-  $ octapus chat -m gemini-1.5-pro-latest "Explain quantum computing"
-  $ octapus chat --system "You are a code reviewer" "Review this code..."
+  $ octapus chat -m gemini-3.6-flash "Explain quantum computing"
+  $ octapus chat                     # interactive TUI (/help inside)
+  $ octapus setup                    # provider & API key wizard
   $ octapus models --available
   $ octapus provider enable groq
   $ octapus config set providers.groq.apiKey "gsk_xxx"
-  $ octapus config list
 
 Config file: ~/.config/octapus/config.yaml
 `);
@@ -274,7 +71,7 @@ program
 program
   .option('-v, --verbose', 'Verbose output')
   .option('--no-color', 'Disable colored output')
-  .hook('preAction', (thisCommand, actionCommand) => {
+  .hook('preAction', (thisCommand) => {
     if (thisCommand.opts().noColor) {
       chalk.level = 0;
     }

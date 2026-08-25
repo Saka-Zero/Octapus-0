@@ -1,11 +1,11 @@
-import { Provider, Message, ChatOptions, RouterOptions } from './providers';
+import { Provider, Message, ChatOptions, RouterOptions, StreamEvent } from './providers';
 import { loadConfig } from './config';
 import chalk from 'chalk';
 
 export interface ChatResult {
   provider: string;
   model: string;
-  stream: AsyncIterable<string>;
+  stream: AsyncIterable<StreamEvent>;
 }
 
 export class Router {
@@ -84,11 +84,11 @@ export class Router {
     return chain;
   }
 
-  async *chat(options: RouterOptions): AsyncIterable<string> {
+  async *chat(options: RouterOptions): AsyncIterable<StreamEvent> {
     const { model, messages, options: chatOptions, fallbackModels } = options;
     const quiet = chatOptions?.quiet ?? false;
     const chain = this.getFallbackChain(model, fallbackModels, chatOptions?.disableFallback ?? false);
-    
+
     if (chain.length === 0) {
       throw new Error(`No provider available for model: ${model}`);
     }
@@ -100,12 +100,12 @@ export class Router {
         // Track which provider/model we're using
         this.lastProvider = provider.name;
         this.lastModel = modelToUse;
-        
+
         // Notify user if we're using a different model (skip in TUI/quiet mode)
         if (!quiet && modelToUse !== model) {
           console.error(chalk.gray(`  (Using ${modelToUse} from ${provider.name} as fallback)`));
         }
-        
+
         yield* provider.chat(messages, {
           ...chatOptions,
           model: modelToUse

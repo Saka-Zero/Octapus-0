@@ -9,6 +9,7 @@ import { DEFAULT_SYSTEM_PROMPT } from '../config';
 import { renderMarkdown } from './markdown';
 import { TextInput } from './TextInput';
 import { ModelPicker } from './ModelPicker';
+import { runAgentTurn } from '../agent';
 
 interface ChatAppProps {
   router: Router;
@@ -24,6 +25,22 @@ type DisplayItem =
   | { kind: 'error'; text: string };
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+function ApprovalPrompt({ tool, summary, onDecision }: { tool: string; summary: string; onDecision: (ok: boolean) => void }) {
+  useInput((input, key) => {
+    const lower = (input || '').toLowerCase();
+    if (lower === 'y' || key.return) onDecision(true);
+    else if (lower === 'n' || key.escape) onDecision(false);
+  });
+  return (
+    <Box borderStyle="round" borderColor="yellow" flexDirection="column" paddingX={1} marginTop={1}>
+      <Text color="yellow" bold>⚠ Approval needed</Text>
+      <Text>{tool}: </Text>
+      <Text color="cyan">{summary}</Text>
+      <Text dim>y = allow · n = deny</Text>
+    </Box>
+  );
+}
 
 function Spinner({ label }: { label: string }) {
   const [frame, setFrame] = useState(0);
@@ -107,6 +124,8 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const [thinking, setThinking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [agentMode, setAgentMode] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState<{ tool: string; summary: string; resolve: (ok: boolean) => void } | null>(null);
 
   const sessionRef = useRef<ConversationSession>(initialSession);
   const [headerModel, setHeaderModel] = useState(initialSession.model);
@@ -170,24 +189,51 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
 
     setThinking(true);
     try {
-      for await (const chunk of router.chat({
-        model,
-        messages,
-        options: {
+      const consumeStream = async () => {
+        for await (const ev of router.chat({
           model,
-          temperature: options.temperature ?? config.settings.temperature,
-          maxTokens: options.maxTokens ?? config.settings.maxTokens,
-          stream: options.stream ?? config.settings.stream,
-          disableFallback: options.fallback === false,
-          quiet: true
-        },
-        fallbackModels: options.fallback ? config.fallbackModels : []
-      })) {
-        if (!flushTimer) {
-          setThinking(false);
-          startFlusher();
+          messages,
+          options: {
+            model,
+            temperature: options.temperature ?? config.settings.temperature,
+            maxTokens: options.maxTokens ?? config.settings.maxTokens,
+            stream: true,
+            disableFallback: options.fallback === false,
+            quiet: true
+          },
+          fallbackModels: options.fallback ? config.fallbackModels : []
+        })) {
+          if (ev.type === 'text') {
+            if (!flushTimer) { setThinking(false); startFlusher(); }
+            streamText += ev.text;
+          }
+          else if (ev.type === 'tool_calls') {
+            streamText += `\n\n_(Model attempted tool use: ${ev.calls.map((c: any) => c.function.name).join(', ')}. Enable /agent to allow execution.)_`;
+          }
         }
-        streamText += chunk;
+      };
+
+      if (agentMode) {
+        // Agentic loop with tools + approval
+        const result = await runAgentTurn(router, messages, model, config, options, {
+          onText: (chunk) => {
+            if (!flushTimer) { setThinking(false); startFlusher(); }
+            streamText += chunk;
+          },
+          onToolStart: (name, args) => pushNote(`🔧 ${name} ${args}`),
+          onToolResult: (name, ok, output) => {
+            const preview = output.length > 300 ? output.slice(0, 300) + '…' : output;
+            setDisplay((d) => [...d, { kind: 'note', text: `${ok ? '✔' : '✗'} ${name} → ${preview}` }]);
+          },
+          approval: (tool, summary) =>
+            new Promise<boolean>((resolve) => {
+              if (config.settings.agentAutoApprove) return resolve(true);
+              setPendingApproval({ tool, summary, resolve });
+            })
+        });
+        streamText = result.finalText || streamText;
+      } else {
+        await consumeStream();
       }
 
       stopFlusher();
@@ -241,6 +287,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/new               Start new session (keep old in scrollback)',
           '/model [name]      Show or change model',
           '/models            Interactive model picker (search + arrows)',
+          '/agent [auto]      Toggle agent mode (tools); auto skips approval',
           '/memory            Show long-term memory facts',
           '/remember <k> <v>  Store a fact permanently',
           '/forget <key>      Delete a memory fact',
@@ -299,6 +346,19 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       case '/models':
         setPickerOpen(true);
         return true;
+
+      case '/agent': {
+        if (args === 'auto') {
+          config.settings.agentAutoApprove = !config.settings.agentAutoApprove;
+          pushNote(`Agent auto-approve: ${config.settings.agentAutoApprove ? 'ON (tools run without asking)' : 'OFF (asks before write/run)'}`);
+          return true;
+        }
+        setAgentMode((v) => !v);
+        pushNote(agentMode
+          ? '🤖 Agent mode OFF — back to plain chat.'
+          : '🤖 Agent mode ON — I can read/write files, run commands, and search code. Sensitive actions ask first (/agent auto to skip asking).');
+        return true;
+      }
 
       case '/model': {
         if (args) {
@@ -476,8 +536,20 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
+      {/* Approval prompt for sensitive tools */}
+      {pendingApproval && (
+        <ApprovalPrompt
+          tool={pendingApproval.tool}
+          summary={pendingApproval.summary}
+          onDecision={(ok) => {
+            pendingApproval.resolve(ok);
+            setPendingApproval(null);
+          }}
+        />
+      )}
+
       {/* Input */}
-      {!pickerOpen && (
+      {!pickerOpen && !pendingApproval && (
         <Box marginTop={1}>
           <TextInput
             placeholder={busy ? '' : 'Type a message… (/help for commands)'}

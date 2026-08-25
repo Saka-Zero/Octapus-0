@@ -441,14 +441,14 @@ async function sendMessage(
     
     let spinnerStopped = false;
     
-    for await (const chunk of router.chat({
+    for await (const ev of router.chat({
       model,
       messages,
       options: {
         model,
         temperature: options.temperature ?? config.settings.temperature,
         maxTokens: options.maxTokens ?? config.settings.maxTokens,
-        stream: options.stream ?? config.settings.stream,
+        stream: true,
         disableFallback: options.fallback === false
       },
       fallbackModels: options.fallback ? config.fallbackModels : []
@@ -457,8 +457,12 @@ async function sendMessage(
         spinner.stop();
         spinnerStopped = true;
       }
-      process.stdout.write(chalk.green(chunk));
-      fullResponse += chunk;
+      if (ev.type === 'text') {
+        process.stdout.write(chalk.green(ev.text));
+        fullResponse += ev.text;
+      } else if (ev.type === 'tool_calls') {
+        process.stdout.write(chalk.gray(`\n  (Model attempted tool use: ${ev.calls.map((c: any) => c.function.name).join(', ')}. Use interactive mode + /agent to allow execution.)\n`));
+      }
     }
     
     console.log();
