@@ -81,7 +81,15 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
   { name: 'opencode-zen', baseURL: 'https://opencode.ai/zen/v1', priority: 6, needsKey: true,
     models: ['deepseek-v4-flash-free', 'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free',
       'minimax-m3-free' as string, 'mimo-v2.5-free', 'hy3-free', 'laguna-s-2.1-free',
-      'x-preview-f-free', 'big-pickle'].filter(Boolean) }
+      'x-preview-f-free', 'big-pickle'].filter(Boolean) },
+  // LLM7 — anonymous tier works with literal "unused" token (verified live).
+  // Anonymous limits: ~1 req/s, premium models need a real key from dash.llm7.io.
+  { name: 'llm7', baseURL: 'https://api.llm7.io/v1', priority: 5, needsKey: false,
+    models: ['default', 'fast', 'DeepSeek-V4-Flash-0731', 'codestral-latest'] },
+  // BlockRun — free NVIDIA tier, no auth at all (verified live)
+  { name: 'blockrun', baseURL: 'https://blockrun.ai/api/v1', priority: 2, needsKey: false,
+    models: ['nvidia/mistral-nemotron', 'nvidia/nemotron-nano-9b-v2', 'nvidia/nemotron-nano-12b-v2-vl',
+      'nvidia/step-3.7-flash', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'] }
 ];
 
 // minimax-m3-free verified via public /models listing

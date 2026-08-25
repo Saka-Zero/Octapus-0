@@ -79,7 +79,11 @@ const DEFAULT_CONFIG: Config = {
     // Works with NO API key — zero-setup free provider
     pollinations: { baseURL: 'https://text.pollinations.ai/openai', apiKey: '', priority: 1, enabled: true },
     // OpenCode Zen free models — auto-imports key from `opencode auth login`
-    'opencode-zen': { baseURL: 'https://opencode.ai/zen/v1', apiKey: '', priority: 6, enabled: true }
+    'opencode-zen': { baseURL: 'https://opencode.ai/zen/v1', apiKey: '', priority: 6, enabled: true },
+    // LLM7 anonymous tier — "unused" token works, no registration
+    llm7: { baseURL: 'https://api.llm7.io/v1', apiKey: 'unused', priority: 5, enabled: true },
+    // BlockRun free NVIDIA tier — zero auth
+    blockrun: { baseURL: 'https://blockrun.ai/api/v1', apiKey: '', priority: 2, enabled: true }
   },
   defaultModel: 'llama-3.3-70b-versatile',
   fallbackModels: [
