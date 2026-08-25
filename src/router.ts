@@ -44,7 +44,7 @@ export class Router {
     return undefined;
   }
 
-  getFallbackChain(model: string): Array<{ provider: Provider; modelToUse: string }> {
+  getFallbackChain(model: string, fallbackModels?: string[]): Array<{ provider: Provider; modelToUse: string }> {
     const chain: Array<{ provider: Provider; modelToUse: string }> = [];
     const primary = this.getProviderForModel(model);
     if (primary) {
@@ -52,8 +52,9 @@ export class Router {
       chain.push({ provider: primary, modelToUse });
     }
 
-    // Add fallback models from config
-    for (const fallbackModel of this.config.fallbackModels) {
+    // Add fallback models from config (or override if provided)
+    const models = fallbackModels ?? this.config.fallbackModels;
+    for (const fallbackModel of models) {
       if (fallbackModel === model) continue;
       const provider = this.getProviderForModel(fallbackModel);
       if (provider && !chain.some(c => c.provider === provider)) {
@@ -77,7 +78,7 @@ export class Router {
 
   async *chat(options: RouterOptions): AsyncIterable<string> {
     const { model, messages, options: chatOptions, fallbackModels } = options;
-    const chain = this.getFallbackChain(model);
+    const chain = this.getFallbackChain(model, fallbackModels);
     
     if (chain.length === 0) {
       throw new Error(`No provider available for model: ${model}`);

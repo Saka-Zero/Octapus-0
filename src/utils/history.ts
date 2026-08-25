@@ -37,8 +37,30 @@ function ensureHistoryDir(): void {
  * Get the current session file path
  */
 function getSessionPath(sessionId?: string): string {
-  const id = sessionId || getCurrentSessionId();
-  return path.join(HISTORY_DIR, `${id}.json`);
+  if (sessionId) {
+    return path.join(HISTORY_DIR, `${sessionId}.json`);
+  }
+  // No ID given — find the most recently active session
+  const latest = getLatestSessionId();
+  return path.join(HISTORY_DIR, `${latest}.json`);
+}
+
+/**
+ * Find the most recently active session ID
+ */
+function getLatestSessionId(): string | null {
+  ensureHistoryDir();
+  try {
+    const files = fs.readdirSync(HISTORY_DIR)
+      .filter(f => f.endsWith('.json'))
+      .sort()
+      .reverse();
+    
+    if (files.length === 0) return null;
+    return files[0].replace('.json', '');
+  } catch {
+    return null;
+  }
 }
 
 /**
