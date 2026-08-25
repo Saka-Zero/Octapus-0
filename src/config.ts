@@ -77,7 +77,9 @@ const DEFAULT_CONFIG: Config = {
     venice: { baseURL: 'https://api.venice.ai/api/v1', apiKey: '', priority: 2, enabled: false },
     scaleway: { baseURL: 'https://api.scaleway.ai/v1', apiKey: '', priority: 2, enabled: false },
     // Works with NO API key — zero-setup free provider
-    pollinations: { baseURL: 'https://text.pollinations.ai/openai', apiKey: '', priority: 1, enabled: true }
+    pollinations: { baseURL: 'https://text.pollinations.ai/openai', apiKey: '', priority: 1, enabled: true },
+    // OpenCode Zen free models — auto-imports key from `opencode auth login`
+    'opencode-zen': { baseURL: 'https://opencode.ai/zen/v1', apiKey: '', priority: 6, enabled: true }
   },
   defaultModel: 'llama-3.3-70b-versatile',
   fallbackModels: [

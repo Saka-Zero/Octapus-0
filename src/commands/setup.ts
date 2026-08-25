@@ -13,6 +13,7 @@ export async function runSetup(router: Router): Promise<void> {
     new Promise((resolve) => rl.question(q, (a) => resolve(a.trim())));
 
   const PROVIDERS: Array<{ name: string; keyUrl: string; note?: string }> = [
+    { name: 'opencode-zen', keyUrl: 'https://opencode.ai/zen', note: 'FREE models — login once via `opencode auth login`, auto-imported!' },
     { name: 'gemini', keyUrl: 'https://aistudio.google.com/apikey' },
     { name: 'groq', keyUrl: 'https://console.groq.com/keys' },
     { name: 'github-models', keyUrl: 'https://github.com/settings/tokens', note: 'PAT with models scope' },

@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Provider, ProviderConfig, Message, ChatOptions, StreamEvent, Tool, ToolCall, RouterOptions } from './base';
 import { OpenAICompatibleProvider } from './openai-compatible';
 
@@ -73,21 +75,73 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
     models: ['qwen2.5-72b-instruct', 'llama-3.1-8b-instruct', 'mistral-nemo-instruct-2407'] },
   { name: 'pollinations', baseURL: 'https://text.pollinations.ai/openai', priority: 1, needsKey: false,
     // Verified alive keyless (2026-08): legacy API retired most named models
-    models: ['openai', 'openai-fast'] }
+    models: ['openai', 'openai-fast'] },
+  // OpenCode Zen — official "use with any agent" gateway. Free models below;
+  // key comes from `opencode auth login` (auto-imported) or OPENCODE_API_KEY.
+  { name: 'opencode-zen', baseURL: 'https://opencode.ai/zen/v1', priority: 6, needsKey: true,
+    models: ['deepseek-v4-flash-free', 'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free',
+      'minimax-m3-free' as string, 'mimo-v2.5-free', 'hy3-free', 'laguna-s-2.1-free',
+      'x-preview-f-free', 'big-pickle'].filter(Boolean) }
 ];
+
+// minimax-m3-free verified via public /models listing
+BUILTIN_PROVIDERS[BUILTIN_PROVIDERS.length - 1].models.push('qwen3.6-plus-free');
+
+/**
+ * Try to import an OpenCode Zen API key from a local OpenCode installation.
+ * Works after the user runs `opencode auth login` once (GitHub OAuth).
+ */
+export function importOpencodeZenKey(): string | null {
+  const candidates = [
+    path.join(process.env.HOME || process.env.USERPROFILE || '', '.local', 'share', 'opencode', 'auth.json'),
+    path.join(process.env.APPDATA || '', 'opencode', 'auth.json')
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+      // auth.json shape: { "<provider>": { type, key | apiKey | access_token } }
+      for (const [providerId, entry] of Object.entries(data as Record<string, any>)) {
+        if (!entry || typeof entry !== 'object') continue;
+        const lower = providerId.toLowerCase();
+        if (!lower.includes('zen') && !lower.includes('opencode')) continue;
+        const token = entry.key || entry.apiKey || entry.access_token || entry.accessToken;
+        if (typeof token === 'string' && token.length > 10) return token;
+      }
+      // Fallback: any single api-type credential
+      for (const entry of Object.values(data as Record<string, any>)) {
+        if (entry && typeof entry === 'object' && typeof (entry as any).key === 'string') {
+          return (entry as any).key;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 
 /**
  * Instantiate a built-in provider from config.
+ * opencode-zen: auto-imports the key from a local OpenCode login
+ * (`opencode auth login`) or the OPENCODE_API_KEY env var.
  */
 export function createBuiltinProvider(def: BuiltinProviderDef, cfg: ProviderConfig & { enabled?: boolean }): OpenAICompatibleProvider | null {
   if (!cfg?.enabled) return null;
-  if (def.needsKey && !cfg.apiKey) return null;
+
+  let apiKey = cfg.apiKey || '';
+  if (def.name === 'opencode-zen' && !apiKey) {
+    apiKey = process.env.OPENCODE_API_KEY || importOpencodeZenKey() || '';
+  }
+  if (def.needsKey && !apiKey) return null;
+
   const extraHeaders = def.name === 'openrouter'
     ? { 'HTTP-Referer': 'https://github.com/Saka-Zero/Octapus-0', 'X-Title': 'Octapus-0' }
     : undefined;
   return new OpenAICompatibleProvider(
     def.name,
-    cfg.apiKey || 'none',
+    apiKey || 'none',
     cfg.baseURL || def.baseURL,
     cfg.priority ?? def.priority,
     def.models,
