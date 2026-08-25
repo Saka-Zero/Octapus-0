@@ -72,7 +72,8 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
   { name: 'scaleway', baseURL: 'https://api.scaleway.ai/v1', priority: 2, needsKey: true,
     models: ['qwen2.5-72b-instruct', 'llama-3.1-8b-instruct', 'mistral-nemo-instruct-2407'] },
   { name: 'pollinations', baseURL: 'https://text.pollinations.ai/openai', priority: 1, needsKey: false,
-    models: ['openai', 'openai-fast', 'mistral', 'llama', 'qwen-coder'] }
+    // Verified alive keyless (2026-08): legacy API retired most named models
+    models: ['openai', 'openai-fast'] }
 ];
 
 /**
