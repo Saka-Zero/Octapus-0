@@ -140,6 +140,71 @@ function registerProviders(): void {
       priority: 1,
       needsKey: false,
       models: ['openai', 'openai-fast', 'mistral', 'llama', 'qwen-coder']
+    },
+    {
+      // Local LM Studio server — no key, fully offline
+      name: 'lmstudio',
+      baseURL: 'http://localhost:1234/v1',
+      priority: 7,
+      needsKey: false,
+      models: []
+    },
+    {
+      // Cloudflare Workers AI — 10k neurons/day free. User must set their
+      // account ID into the baseURL: oct config set providers.cloudflare.baseURL ...
+      name: 'cloudflare',
+      baseURL: 'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['@cf/meta/llama-3.1-8b-instruct', '@cf/qwen/qwen2.5-coder-32b-instruct', '@cf/mistralai/mistral-small-3.1-24b-instruct']
+    },
+    {
+      // OVH AI Endpoints — free tier with rate limits
+      name: 'ovh',
+      baseURL: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['Meta-Llama-3_1-8B-Instruct', 'Qwen2_5-72B-Instruct', 'Mistral-Nemo-Instruct-2407']
+    },
+    {
+      // Tencent Hunyuan — hunyuan-lite is free forever
+      name: 'hunyuan',
+      baseURL: 'https://api.hunyuan.cloud.tencent.com/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['hunyuan-lite', 'hunyuan-turbo', 'hunyuan-standard']
+    },
+    {
+      // Baidu Qianfan v2 — ernie-speed/lite are free
+      name: 'qianfan',
+      baseURL: 'https://qianfan.baidubce.com/v2',
+      priority: 2,
+      needsKey: true,
+      models: ['ernie-speed-8k', 'ernie-lite-8k', 'ernie-speed-128k']
+    },
+    {
+      // Chutes.ai — free tier (~200 req/day)
+      name: 'chutes',
+      baseURL: 'https://api.chutes.ai/app/api/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['deepseek-ai/DeepSeek-R1', 'Qwen/Qwen2.5-72B-Instruct', 'meta-llama/Llama-3.3-70B-Instruct']
+    },
+    {
+      // Venice AI — privacy-focused, free tier available
+      name: 'venice',
+      baseURL: 'https://api.venice.ai/api/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['llama-3.3-70b', 'qwen-2.5-qwq-32b', 'dolphin-mixtral-8x22b']
+    },
+    {
+      // Scaleway Generative APIs — free tier
+      name: 'scaleway',
+      baseURL: 'https://api.scaleway.ai/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['qwen2.5-72b-instruct', 'llama-3.1-8b-instruct', 'mistral-nemo-instruct-2407']
     }
   ];
 

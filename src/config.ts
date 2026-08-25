@@ -52,6 +52,19 @@ const DEFAULT_CONFIG: Config = {
     requesty: { apiKey: '', priority: 2, enabled: false },
     siliconflow: { apiKey: '', priority: 2, enabled: false },
     modelscope: { apiKey: '', priority: 2, enabled: false },
+    // Local — no key needed (LM Studio local server)
+    lmstudio: { baseURL: 'http://localhost:1234/v1', apiKey: '', priority: 7, enabled: false },
+    // Free-tier cloud providers
+    // Cloudflare Workers AI: 10k neurons/day free. Replace {ACCOUNT_ID} with your account ID!
+    cloudflare: { baseURL: 'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1', apiKey: '', priority: 2, enabled: false },
+    ovh: { baseURL: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1', apiKey: '', priority: 2, enabled: false },
+    // Tencent Hunyuan: hunyuan-lite is free forever
+    hunyuan: { baseURL: 'https://api.hunyuan.cloud.tencent.com/v1', apiKey: '', priority: 2, enabled: false },
+    // Baidu Qianfan v2: ernie-speed/lite are free
+    qianfan: { baseURL: 'https://qianfan.baidubce.com/v2', apiKey: '', priority: 2, enabled: false },
+    chutes: { baseURL: 'https://api.chutes.ai/app/api/v1', apiKey: '', priority: 2, enabled: false },
+    venice: { baseURL: 'https://api.venice.ai/api/v1', apiKey: '', priority: 2, enabled: false },
+    scaleway: { baseURL: 'https://api.scaleway.ai/v1', apiKey: '', priority: 2, enabled: false },
     // Works with NO API key — zero-setup free provider
     pollinations: { baseURL: 'https://text.pollinations.ai/openai', apiKey: '', priority: 1, enabled: true }
   },

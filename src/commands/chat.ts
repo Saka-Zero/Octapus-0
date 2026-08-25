@@ -140,6 +140,14 @@ export function createChatCommand(router: Router): Command {
         console.log(chalk.gray('  SiliconFlow:   https://siliconflow.cn/'));
         console.log(chalk.gray('  ModelScope:    https://modelscope.cn/'));
         console.log(chalk.gray('  Pollinations:  NO KEY NEEDED — works out of the box!'));
+        console.log(chalk.gray('  LM Studio:     local app — enable server, no key needed'));
+        console.log(chalk.gray('  Cloudflare:    https://dash.cloudflare.com/ (set baseURL with your account ID)'));
+        console.log(chalk.gray('  OVH AI:        https://endpoints.ai.cloud.ovh.net/ (free token)'));
+        console.log(chalk.gray('  Hunyuan:       https://console.cloud.tencent.com/hunyuan/api-key'));
+        console.log(chalk.gray('  Qianfan:       https://console.bce.baidu.com/iam/ (ernie-speed free)'));
+        console.log(chalk.gray('  Chutes:        https://chutes.ai/app/api-keys'));
+        console.log(chalk.gray('  Venice:        https://venice.ai/settings/api-keys'));
+        console.log(chalk.gray('  Scaleway:      https://console.scaleway.com/ (API keys)'));
         process.exit(1);
       }
 

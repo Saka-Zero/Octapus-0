@@ -70,6 +70,30 @@ const PRICING: Record<string, Record<string, { input: number; output: number }>>
   },
   pollinations: {
     '*': { input: 0, output: 0 }
+  },
+  lmstudio: {
+    '*': { input: 0, output: 0 }
+  },
+  cloudflare: {
+    '*': { input: 0, output: 0 }
+  },
+  ovh: {
+    '*': { input: 0, output: 0 }
+  },
+  hunyuan: {
+    '*': { input: 0, output: 0 }
+  },
+  qianfan: {
+    '*': { input: 0, output: 0 }
+  },
+  chutes: {
+    '*': { input: 0, output: 0 }
+  },
+  venice: {
+    '*': { input: 0, output: 0 }
+  },
+  scaleway: {
+    '*': { input: 0, output: 0 }
   }
 };
 

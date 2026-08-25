@@ -3,6 +3,10 @@ import { Provider, Message, ChatOptions } from './base';
 export class TogetherProvider implements Provider {
   name = 'together';
   models = [
+    // Free-tier snapshots (genuinely $0 on Together)
+    'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
+    'deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free',
+    // Paid-but-cheap turbo models
     'meta-llama/Llama-3.1-8B-Instruct-Turbo',
     'meta-llama/Llama-3.1-70B-Instruct-Turbo',
     'meta-llama/Llama-3.1-405B-Instruct-Turbo',

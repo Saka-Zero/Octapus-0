@@ -7,7 +7,10 @@ export class GeminiProvider implements Provider {
     'gemini-3.6-pro',
     'gemini-2.5-flash',
     'gemini-2.5-pro',
-    'gemini-2.0-flash'
+    'gemini-2.0-flash',
+    // Open models — free via AI Studio
+    'gemma-3-27b-it',
+    'gemma-3-12b-it'
   ];
   priority = 8;
   private apiKey: string;
