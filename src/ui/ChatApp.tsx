@@ -14,6 +14,7 @@ import { runAgentTurn } from '../agent';
 import { getTheme, listThemeNames } from './theme';
 import { execSync } from 'child_process';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS, Domain } from '../utils/roles';
+import { runCouncil } from '../council';
 
 interface ChatAppProps {
   router: Router;
@@ -127,6 +128,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
+  const [councilMode, setCouncilMode] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<{ tool: string; summary: string; resolve: (ok: boolean) => void } | null>(null);
 
   const sessionRef = useRef<ConversationSession>(initialSession);
@@ -229,6 +231,29 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
             })
         });
         streamText = result.finalText || streamText;
+      } else if (councilMode) {
+        // 🏛️ COUNCIL — multi-AI deliberation
+        setThinking(false);
+        const result = await runCouncil(router, prompt, messages, config, { ...options, signal: controller.signal }, {
+          onPhase: (phase) => pushNote(phase),
+          onParticipant: (provider, role, status, detail) => {
+            const icon = status === 'start' ? '⏳' : status === 'done' ? '✔' : '✗';
+            pushNote(`${icon} ${provider} [${role}]${detail ? ` — ${detail}` : ''}`);
+          },
+          onDebate: (provider, points) => pushNote(`⚔️ ${provider}: ${points}…`)
+        });
+        stopFlusher();
+        streamText = result.finalText;
+        lastProviderRef.current = `council(${result.participants.map((p) => p.provider).join('+')})`;
+        setStreaming(null);
+        addMessage(sessionRef.current, 'assistant', streamText);
+        lastAssistantRef.current = streamText;
+        setDisplay((d) => [...d, { kind: 'assistant', text: streamText }]);
+        const tIn = estimateTokens(messages.map((m) => m.content).join(' '));
+        const tOut = estimateTokens(streamText);
+        setTotals((t) => ({ tokensIn: t.tokensIn + Math.round(tIn), tokensOut: t.tokensOut + Math.round(tOut), cost: t.cost }));
+        void updateDigest(router, sessionRef.current, config);
+        return; // council handles its own persistence — skip normal path
       } else {
         for await (const ev of router.chat({
           model,
@@ -312,6 +337,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/model [name]      Show or change model',
           '/models            Interactive model picker',
           '/agent [auto]      Toggle agent mode (tools)',
+          '/council           Council mode: all AIs debate → 1 super answer',
           '/memory            Show long-term memory facts',
           '/remember <k> <v>  Store a fact permanently',
           '/forget <key>      Delete a memory fact',
@@ -390,6 +416,14 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         pushNote(agentMode
           ? '🤖 Agent mode OFF.'
           : '🤖 Agent mode ON — I can read/write files, run commands, search code. Sensitive actions ask first (/agent auto to skip).');
+        return true;
+      }
+
+      case '/council': {
+        setCouncilMode((v) => !v);
+        pushNote(councilMode
+          ? '🏛️ Council mode OFF — back to single specialist.'
+          : '🏛️ Council mode ON — every prompt goes to a round of ALL active specialists: independent analysis → cross-debate → synthesis into one super answer. Slower but mighty.');
         return true;
       }
 
