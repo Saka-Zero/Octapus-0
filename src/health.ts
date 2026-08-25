@@ -79,7 +79,10 @@ export class HealthRegistry {
   private providers: Record<string, ProviderHealth> = {};
   private loaded = false;
 
-  constructor(private filePath: string = HEALTH_FILE) {}
+  constructor(
+    private filePath: string = HEALTH_FILE,
+    private now: () => number = () => Date.now()
+  ) {}
 
   private load(): void {
     if (this.loaded) return;
@@ -88,7 +91,7 @@ export class HealthRegistry {
       if (!fs.existsSync(this.filePath)) return;
       const data = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as HealthFile;
       if (!data.providers) return;
-      const now = Date.now();
+      const now = this.now();
       for (const [name, h] of Object.entries(data.providers)) {
         // Prune expired entries on load
         if (h.state === 'open' && now >= Math.max(h.openUntil, h.retryAfterUntil ?? 0)) continue;
@@ -103,8 +106,11 @@ export class HealthRegistry {
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      const data: HealthFile = { version: 1, savedAt: Date.now(), providers: this.providers };
-      fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2));
+      const data: HealthFile = { version: 1, savedAt: this.now(), providers: this.providers };
+      // Atomic write: tmp file + rename prevents concurrent-process clobbering
+      const tmp = this.filePath + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+      fs.renameSync(tmp, this.filePath);
     } catch {
       // best-effort persistence
     }
@@ -116,12 +122,11 @@ export class HealthRegistry {
     return this.providers[name];
   }
 
-  /** Single decision point used by the router loop */
-  getState(name: string): { usable: boolean; probing: boolean; reason?: string; waitMsLeft?: number } {
+  /** Pure inspection — NEVER mutates state (safe for ranking/filtering) */
+  peekState(name: string): { usable: boolean; probing: boolean; reason?: string; waitMsLeft?: number } {
     const h = this.entry(name);
     if (h.state !== 'open') return { usable: true, probing: false };
-
-    const now = Date.now();
+    const now = this.now();
     const deadline = Math.max(h.openUntil, h.retryAfterUntil ?? 0);
     if (now < deadline) {
       return {
@@ -131,10 +136,31 @@ export class HealthRegistry {
         waitMsLeft: deadline - now
       };
     }
-    // Expired → this attempt IS the probe
-    if (h.halfOpenProbeActive) return { usable: false, probing: false, reason: 'probe in flight' };
-    h.halfOpenProbeActive = true;
+    // Expired open → eligible for probe
     return { usable: true, probing: true };
+  }
+
+  /**
+   * Claim-and-go: called ONLY at the actual dispatch site in the router loop.
+   * Marks an expired-open provider as probing so parallel callers don't double-probe.
+   */
+  beginProbe(name: string): { usable: boolean; reason?: string } {
+    const h = this.entry(name);
+    if (h.state !== 'open') return { usable: true };
+    const now = this.now();
+    const deadline = Math.max(h.openUntil, h.retryAfterUntil ?? 0);
+    if (now < deadline) {
+      return { usable: false, reason: `${h.lastErrorKind || 'failure'} — ${h.lastErrorMessage}` };
+    }
+    if (h.halfOpenProbeActive) return { usable: false, reason: 'probe in flight' };
+    h.halfOpenProbeActive = true;
+    return { usable: true };
+  }
+
+  /** Clear a stranded probe flag (e.g. request aborted mid-probe) */
+  cancelProbe(name: string): void {
+    const h = this.entry(name);
+    h.halfOpenProbeActive = false;
   }
 
   recordSuccess(name: string): void {
@@ -147,9 +173,9 @@ export class HealthRegistry {
   recordFailure(name: string, cls: FailureClass): void {
     const h = this.entry(name);
     h.consecutiveFailures++;
-    h.lastFailureAt = Date.now();
+    h.lastFailureAt = this.now();
     h.lastErrorKind = cls.kind;
-    h.halfOpenProbeActive = false;
+    h.halfOpenProbeActive = false; // probe consumed by this failure
 
     switch (cls.kind) {
       case 'aborted':
@@ -163,13 +189,13 @@ export class HealthRegistry {
           ? Math.min(Math.max(cls.retryAfterMs, DEFAULTS.quotaMinMs), DEFAULTS.quotaMaxMs)
           : Math.min(h.backoffMs, DEFAULTS.quotaMaxMs);
         h.state = 'open';
-        h.openUntil = Date.now() + wait;
-        h.retryAfterUntil = cls.retryAfterMs ? Date.now() + cls.retryAfterMs : null;
+        h.openUntil = this.now() + wait;
+        h.retryAfterUntil = cls.retryAfterMs ? this.now() + cls.retryAfterMs : null;
         break;
       }
       case 'auth':
         h.state = 'open';
-        h.openUntil = Date.now() + DEFAULTS.authOpenDurationMs;
+        h.openUntil = this.now() + DEFAULTS.authOpenDurationMs;
         h.retryAfterUntil = null;
         break;
       case 'server':
@@ -177,7 +203,7 @@ export class HealthRegistry {
         if (h.consecutiveFailures >= DEFAULTS.failureThreshold) {
           h.state = 'open';
           h.backoffMs = Math.min(h.backoffMs * 2, DEFAULTS.maxOpenDurationMs);
-          h.openUntil = Date.now() + h.backoffMs;
+          h.openUntil = this.now() + h.backoffMs;
           h.retryAfterUntil = null;
         }
         break;
@@ -189,13 +215,13 @@ export class HealthRegistry {
 
   markModelDead(providerName: string, model: string, ttlMs = 30 * 60_000): void {
     if (!this.deadModels[providerName]) this.deadModels[providerName] = new Map();
-    this.deadModels[providerName].set(model, Date.now() + ttlMs);
+    this.deadModels[providerName].set(model, this.now() + ttlMs);
   }
 
   isModelDead(providerName: string, model: string): boolean {
     const m = this.deadModels[providerName]?.get(model);
     if (!m) return false;
-    if (Date.now() > m) {
+    if (this.now() > m) {
       this.deadModels[providerName].delete(model);
       return false;
     }

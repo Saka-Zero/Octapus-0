@@ -3,6 +3,7 @@ import { Message } from './providers';
 import { classifyIntent, DOMAIN_PERSONAS, domainLabel } from './utils/roles';
 import { matchSkills, formatSkillsForPrompt } from './utils/skills';
 import { formatProjectContext } from './utils/projectContext';
+import { formatMemoryForPrompt } from './utils/memory';
 import { DEFAULT_SYSTEM_PROMPT } from './config';
 
 export interface CouncilCallbacks {
@@ -89,6 +90,7 @@ export async function runCouncil(
   const baseSystem = [
     options.system || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT,
     formatProjectContext(),
+    formatMemoryForPrompt(),
     skillText,
     DOMAIN_PERSONAS[domain]
   ].filter(Boolean).join('\n\n');
@@ -212,7 +214,7 @@ export async function runCouncil(
     `\n\nTASK: Merge everything into ONE definitive, super-detailed answer.
 Rules:
 - Resolve contradictions explicitly (state which position is correct and why).
-- Keep every unique valuable insight; attribute non-obvious ones inline like (per ${participants[0]?.provider}).
+- Keep every unique valuable insight; attribute non-obvious ones inline like (per ${analyses[0]?.p.provider}).
 - Remove repetition and fluff.
 - Structure with clear markdown headings.
 - End with a short '⚡ Council consensus' summary section.`

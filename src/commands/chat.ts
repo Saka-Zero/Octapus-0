@@ -14,6 +14,7 @@ import {
 import { matchSkills, formatSkillsForPrompt } from '../utils/skills';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS } from '../utils/roles';
 import { formatProjectContext } from '../utils/projectContext';
+import { pluginSystemPrompt } from '../plugins';
 import { Message } from '../providers';
 import {
   loadSession,
@@ -246,6 +247,11 @@ function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: s
     parts.push(projectCtx);
   }
 
+  const pluginCtx = pluginSystemPrompt();
+  if (pluginCtx) {
+    parts.push(pluginCtx);
+  }
+
   return parts.join('\n\n');
 }
 
@@ -470,6 +476,10 @@ async function sendMessage(
         onDebate: (prov, pts) => console.log(chalk.gray(`  ⚔️ ${prov}: ${pts.slice(0, 160)}…`))
       });
       fullResponse = result.finalText;
+      // CRITICAL: actually print the synthesized answer to the user
+      console.log();
+      console.log(chalk.green(fullResponse));
+      console.log();
     } else {
     for await (const ev of router.chat({
       model,

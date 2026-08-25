@@ -97,7 +97,14 @@ function dirSignature(): string {
     try {
       if (!fs.existsSync(dir)) { sigs.push('none'); continue; }
       const stat = fs.statSync(dir);
-      sigs.push(`${dir}:${stat.mtimeMs}`);
+      // Per-FILE mtimes so content edits invalidate the cache too
+      const files = fs
+        .readdirSync(dir)
+        .map((f) => {
+          try { return `${f}:${fs.statSync(path.join(dir, f)).mtimeMs}`; } catch { return f; }
+        })
+        .join(',');
+      sigs.push(`${dir}:${stat.mtimeMs}:${files}`);
     } catch { sigs.push(`${dir}:err`); }
   }
   return sigs.join('|');

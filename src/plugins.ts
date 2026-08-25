@@ -45,7 +45,13 @@ export function loadPlugins(): OctapusPlugin[] {
   try {
     if (fs.existsSync(PLUGINS_DIR)) {
       const stat = fs.statSync(PLUGINS_DIR);
-      const files = fs.readdirSync(PLUGINS_DIR).join(',');
+      // Per-FILE mtimes — editing a plugin's content must invalidate the cache
+      const files = fs
+        .readdirSync(PLUGINS_DIR)
+        .map((f) => {
+          try { return `${f}:${fs.statSync(path.join(PLUGINS_DIR, f)).mtimeMs}`; } catch { return f; }
+        })
+        .join(',');
       sig = `${stat.mtimeMs}:${files}`;
     }
   } catch { sig = 'err'; }
@@ -61,9 +67,12 @@ export function loadPlugins(): OctapusPlugin[] {
     }
     for (const f of fs.readdirSync(PLUGINS_DIR)) {
       if (!f.endsWith('.js')) continue;
+      const resolved = path.join(PLUGINS_DIR, f);
       try {
+        // Bust Node's require cache so edited plugins actually reload
+        delete require.cache[resolved];
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const mod = require(path.join(PLUGINS_DIR, f));
+        const mod = require(resolved);
         const p = mod.default || mod;
         if (p && typeof p === 'object') {
           plugins.push({ name: p.name || f.replace('.js', ''), ...p });
@@ -85,13 +94,19 @@ export function getPluginCount(): number {
   return loadPlugins().length;
 }
 
-/** Run onSystemPrompt across plugins; returns concatenated additions */
+/** Run onSystemPrompt across plugins; returns concatenated additions.
+ *  Async hook results are contained — rejections never escape. */
 export function pluginSystemPrompt(): string {
   const parts: string[] = [];
   for (const p of loadPlugins()) {
     try {
       const out = p.onSystemPrompt?.();
-      if (typeof out === 'string' && out.trim()) parts.push(out.trim());
+      if (out && typeof (out as unknown as Promise<string>).then === 'function') {
+        // Async result arrives too late for this prompt — contain the rejection
+        (Promise.resolve(out) as Promise<string>).catch(() => {});
+      } else if (typeof out === 'string' && out.trim()) {
+        parts.push(out.trim());
+      }
     } catch (e) {
       console.warn(`⚠ plugin ${p.name} onSystemPrompt error: ${e instanceof Error ? e.message : e}`);
     }

@@ -84,7 +84,7 @@ export class Router {
     };
 
     const healthRank = (p: Provider): number => {
-      const st = this.health.getState(p.name);
+      const st = this.health.peekState(p.name); // pure inspection — no probe claim
       return st.usable ? (st.probing ? 0 : 2) : -1; // healthy > probing > open
     };
 
@@ -126,12 +126,13 @@ export class Router {
 
     let lastError: Error | null = null;
 
-    for (const { provider, modelToUse } of chain) {
-      // Circuit breaker guard — skip providers that are open (quota/auth/outage)
-      const st = this.health.getState(provider.name);
+    for (let ci = 0; ci < chain.length; ci++) {
+      const { provider, modelToUse } = chain[ci];
+      // Circuit breaker guard — claim probe at the actual dispatch site
+      const st = this.health.beginProbe(provider.name);
       if (!st.usable) {
         if (!quiet) {
-          const waitMin = st.waitMsLeft ? ` (retry in ~${Math.ceil(st.waitMsLeft / 60000)}m)` : '';
+          const waitMin = st.reason?.includes('quota') ? '' : '';
           console.log(chalk.gray(`  ⏭ ${provider.name}: circuit open — ${st.reason}${waitMin}`));
         }
         continue;
@@ -154,8 +155,11 @@ export class Router {
         if (!chatOptions?.signal?.aborted) this.health.recordSuccess(provider.name);
         return; // Success
       } catch (err) {
-        // User abort is not a provider failure
-        if (chatOptions?.signal?.aborted) continue;
+        // User abort: release stranded probe, stop sweeping the chain
+        if (chatOptions?.signal?.aborted) {
+          this.health.cancelProbe(provider.name);
+          throw err;
+        }
         const cls = classifyFailure(err);
         this.health.recordFailure(provider.name, cls);
         if (cls.kind === 'model_dead') this.health.markModelDead(provider.name, modelToUse);
@@ -173,7 +177,8 @@ export class Router {
               if (typeof short !== 'string') short = JSON.stringify(short).slice(0, 100);
             }
           } catch { /* keep first line */ }
-          console.log(chalk.gray(`  ⚠ ${provider.name}: ${short.slice(0, 110)} → trying next`));
+          const hasMore = ci < chain.length - 1;
+          console.log(chalk.gray(`  ⚠ ${provider.name}: ${short.slice(0, 110)}${hasMore ? ' → trying next' : ''}`));
         }
         continue;
       }
@@ -217,7 +222,7 @@ export class Router {
   getHealthSnapshot(): Record<string, { usable: boolean; probing: boolean; reason?: string }> {
     const out: Record<string, { usable: boolean; probing: boolean; reason?: string }> = {};
     for (const name of this.providers.keys()) {
-      out[name] = this.health.getState(name);
+      out[name] = this.health.peekState(name);
     }
     return out;
   }

@@ -258,15 +258,25 @@ export async function executeTool(
   }
   if (perm === 'allow') effectiveApprove = undefined;
 
+  // Unified ask-gate honoring perm==='ask' for EVERY tool:
+  // - agent context: delegate to the interactive approval callback
+  // - no callback available (non-agent): deny rather than silently allow
+  if (perm === 'ask') {
+    const summary = argsJson.slice(0, 120);
+    const ok = approve ? await approve(name, summary) : false;
+    if (!ok) return { ok: false, output: `User denied ${name} (permissions: ask).` };
+    effectiveApprove = undefined; // already approved above
+  }
+
   switch (name) {
     case 'read_file':
       return doReadFile(String(args.path || ''));
     case 'write_file':
-      return doWriteFile(String(args.path || ''), String(args.content ?? ''), approve);
+      return doWriteFile(String(args.path || ''), String(args.content ?? ''), effectiveApprove);
     case 'list_dir':
       return doListDir(String(args.path || '.'));
     case 'run_command':
-      return doRunCommand(String(args.command || ''), cwd, approve);
+      return doRunCommand(String(args.command || ''), cwd, effectiveApprove);
     case 'search_files':
       return doSearchFiles(String(args.pattern || ''), String(args.path || '.'), args.glob ? String(args.glob) : undefined);
     case 'web_search':

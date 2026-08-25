@@ -50,7 +50,11 @@ export function loadCustomCommands(): CustomCommand[] {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Expand a custom command into the final prompt */
+/** Expand a custom command into the final prompt.
+ *  Function replacer prevents $&/$`/$$ metacharacters in user args
+ *  from being interpreted as replacement patterns. */
 export function expandCommand(cmd: CustomCommand, args: string): string {
-  return cmd.takesArguments ? cmd.template.replace(/\$ARGUMENTS/g, args) : cmd.template;
+  return cmd.takesArguments
+    ? cmd.template.replace(/\$ARGUMENTS/g, () => args)
+    : cmd.template;
 }
