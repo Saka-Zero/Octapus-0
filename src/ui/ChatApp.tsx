@@ -1,15 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
 import { Box, Text, Static, useApp, useInput } from 'ink';
 import { Router } from '../router';
-import { ConversationSession, saveSession, createSession, addMessage, getMessagesForApi, getHistoryText, clearAllHistory, getOverflowMessages } from '../utils/history';
+import { ConversationSession, saveSession, createSession, addMessage, getMessagesForApi, getHistoryText, clearAllHistory, getOverflowMessages, listSessions } from '../utils/history';
 import { learnFromMessage, getAllFacts, rememberFact, forgetFact } from '../utils/memory';
 import { estimateTokens, calculateCost, formatCost } from '../utils';
 import { matchSkills, formatSkillsForPrompt, listSkills } from '../utils/skills';
-import { DEFAULT_SYSTEM_PROMPT } from '../config';
+import { loadConfig, saveConfig, DEFAULT_SYSTEM_PROMPT } from '../config';
 import { renderMarkdown } from './markdown';
 import { TextInput } from './TextInput';
 import { ModelPicker } from './ModelPicker';
+import { SessionPicker } from './SessionPicker';
 import { runAgentTurn } from '../agent';
+import { getTheme, listThemeNames } from './theme';
+import { execSync } from 'child_process';
 
 interface ChatAppProps {
   router: Router;
@@ -22,9 +25,24 @@ type DisplayItem =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'note'; text: string }
-  | { kind: 'error'; text: string };
+  | { kind: 'error'; text: string }
+  | { kind: 'diff'; title: string; lines: string[] };
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+function Spinner({ label, color }: { label: string; color: string }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <Box>
+      <Text color={color}>{SPINNER_FRAMES[frame]} </Text>
+      <Text dim>{label}</Text>
+    </Box>
+  );
+}
 
 function ApprovalPrompt({ tool, summary, onDecision }: { tool: string; summary: string; onDecision: (ok: boolean) => void }) {
   useInput((input, key) => {
@@ -42,20 +60,6 @@ function ApprovalPrompt({ tool, summary, onDecision }: { tool: string; summary: 
   );
 }
 
-function Spinner({ label }: { label: string }) {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
-    return () => clearInterval(timer);
-  }, []);
-  return (
-    <Box>
-      <Text color="cyan">{SPINNER_FRAMES[frame]} </Text>
-      <Text dim>{label}</Text>
-    </Box>
-  );
-}
-
 function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string): string {
   const parts: string[] = [];
   parts.push(userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
@@ -66,20 +70,13 @@ function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: s
       parts.push(`[Long-term memory about the user — always apply this context]\n${lines.join('\n')}`);
     }
   }
-  if (activeSkillText) {
-    parts.push(activeSkillText);
-  }
+  if (activeSkillText) parts.push(activeSkillText);
   return parts.join('\n\n');
 }
 
-/**
- * Rolling digest: fold turns that fell out of the context window into a
- * persistent AI-generated summary. Fire-and-forget; never blocks the user.
- */
 async function updateDigest(router: Router, session: ConversationSession, config: any): Promise<void> {
   try {
     const overflow = getOverflowMessages(session);
-    // Only bother when there's meaningful overflow to compress
     const overflowChars = overflow.reduce((a, m) => a + m.content.length, 0);
     if (overflow.length < 4 || overflowChars < 6000) return;
 
@@ -104,7 +101,7 @@ async function updateDigest(router: Router, session: ConversationSession, config
       options: { model: session.model, maxTokens: 1500, temperature: 0.2, quiet: true },
       fallbackModels: config.fallbackModels || []
     })) {
-      summary += chunk;
+      if (chunk.type === 'text') summary += chunk.text;
     }
     const trimmed = summary.trim();
     if (trimmed.length > 50) {
@@ -112,18 +109,20 @@ async function updateDigest(router: Router, session: ConversationSession, config
       saveSession(session);
     }
   } catch {
-    // Digest update is best-effort; never surface errors to the user
+    // best-effort
   }
 }
 
 export function ChatApp({ router, session: initialSession, config, options }: ChatAppProps) {
   const { exit } = useApp();
+  const theme = getTheme(config.settings.theme);
 
   const [display, setDisplay] = useState<DisplayItem[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<{ tool: string; summary: string; resolve: (ok: boolean) => void } | null>(null);
 
@@ -135,13 +134,22 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [totals, setTotals] = useState({ tokensIn: 0, tokensOut: 0, cost: 0 });
   const lastProviderRef = useRef('');
+  const abortRef = useRef<AbortController | null>(null);
+  const queueRef = useRef<string[]>([]);
+  const lastAssistantRef = useRef('');
 
-  // Count enabled providers once for the header
   const enabledCount = Object.values(config.providers as Record<string, { enabled?: boolean }>)
     .filter((p) => p.enabled).length;
 
   const pushNote = (text: string) => setDisplay((d) => [...d, { kind: 'note', text }]);
   const refreshMemoryCount = () => setMemoryCount(getAllFacts().length);
+
+  // Esc interrupts generation
+  useInput((input, key) => {
+    if (key.escape && busy && !pendingApproval) {
+      abortRef.current?.abort();
+    }
+  });
 
   // ─── Core send flow ───────────────────────────────────────────────
   const sendToAI = async (prompt: string) => {
@@ -149,21 +157,16 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     setDisplay((d) => [...d, { kind: 'user', text: prompt }]);
     setInputHistory((h) => [...h, prompt]);
 
-    // Persist user message BEFORE the API call (survives failures)
     addMessage(sessionRef.current, 'user', prompt);
 
-    // Auto-learn facts
     const learned = learnFromMessage(prompt);
     if (learned.length > 0) {
       pushNote(`🧠 Remembered: ${learned.join(', ')}`);
       refreshMemoryCount();
     }
 
-    // Auto-match skills for this prompt
     const matched = matchSkills(prompt);
-    if (matched.length > 0) {
-      pushNote(`⚡ Skills: ${matched.map((s) => s.name).join(', ')}`);
-    }
+    if (matched.length > 0) pushNote(`⚡ Skills: ${matched.map((s) => s.name).join(', ')}`);
     const skillText = formatSkillsForPrompt(matched);
 
     const messages = getMessagesForApi(sessionRef.current);
@@ -175,55 +178,42 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     }
 
     const model = sessionRef.current.model;
-    const startTime = Date.now();
     let streamText = '';
 
-    // Throttled streaming: accumulate locally, flush to state every 120ms
     let flushTimer: ReturnType<typeof setInterval> | null = null;
-    const startFlusher = () => {
-      flushTimer = setInterval(() => setStreaming(streamText), 120);
-    };
-    const stopFlusher = () => {
-      if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
-    };
+    const startFlusher = () => flushTimer = setInterval(() => setStreaming(streamText), 120);
+    const stopFlusher = () => { if (flushTimer) { clearInterval(flushTimer); flushTimer = null; } };
+
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setThinking(true);
+    let interrupted = false;
     try {
-      const consumeStream = async () => {
-        for await (const ev of router.chat({
-          model,
-          messages,
-          options: {
-            model,
-            temperature: options.temperature ?? config.settings.temperature,
-            maxTokens: options.maxTokens ?? config.settings.maxTokens,
-            stream: true,
-            disableFallback: options.fallback === false,
-            quiet: true
-          },
-          fallbackModels: options.fallback ? config.fallbackModels : []
-        })) {
-          if (ev.type === 'text') {
-            if (!flushTimer) { setThinking(false); startFlusher(); }
-            streamText += ev.text;
-          }
-          else if (ev.type === 'tool_calls') {
-            streamText += `\n\n_(Model attempted tool use: ${ev.calls.map((c: any) => c.function.name).join(', ')}. Enable /agent to allow execution.)_`;
-          }
-        }
-      };
+      const makeOpts = () => ({
+        model,
+        temperature: options.temperature ?? config.settings.temperature,
+        maxTokens: options.maxTokens ?? config.settings.maxTokens,
+        stream: true,
+        disableFallback: options.fallback === false,
+        quiet: true,
+        signal: controller.signal
+      });
 
       if (agentMode) {
-        // Agentic loop with tools + approval
-        const result = await runAgentTurn(router, messages, model, config, options, {
+        const result = await runAgentTurn(router, messages, model, config, { ...options, signal: controller.signal }, {
           onText: (chunk) => {
             if (!flushTimer) { setThinking(false); startFlusher(); }
             streamText += chunk;
           },
           onToolStart: (name, args) => pushNote(`🔧 ${name} ${args}`),
-          onToolResult: (name, ok, output) => {
-            const preview = output.length > 300 ? output.slice(0, 300) + '…' : output;
-            setDisplay((d) => [...d, { kind: 'note', text: `${ok ? '✔' : '✗'} ${name} → ${preview}` }]);
+          onToolResult: (name, ok, output, diff) => {
+            if (ok && diff && diff.length > 0) {
+              setDisplay((d) => [...d, { kind: 'diff', title: `${name}: ${output.split('(')[0].trim()}`, lines: diff }]);
+            } else {
+              const preview = output.length > 300 ? output.slice(0, 300) + '…' : output;
+              setDisplay((d) => [...d, { kind: 'note', text: `${ok ? '✔' : '✗'} ${name} → ${preview}` }]);
+            }
           },
           approval: (tool, summary) =>
             new Promise<boolean>((resolve) => {
@@ -233,36 +223,63 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         });
         streamText = result.finalText || streamText;
       } else {
-        await consumeStream();
+        for await (const ev of router.chat({
+          model,
+          messages,
+          options: makeOpts(),
+          fallbackModels: options.fallback ? config.fallbackModels : []
+        })) {
+          if (ev.type === 'text') {
+            if (!flushTimer) { setThinking(false); startFlusher(); }
+            streamText += ev.text;
+          } else if (ev.type === 'tool_calls') {
+            streamText += `\n\n_(Model attempted tool use: ${ev.calls.map((c: any) => c.function.name).join(', ')}. Enable /agent to allow execution.)_`;
+          }
+        }
       }
 
       stopFlusher();
-      const full = streamText;
       setStreaming(null);
+      if (streamText.trim()) {
+        addMessage(sessionRef.current, 'assistant', streamText);
+        lastAssistantRef.current = streamText;
+        setDisplay((d) => [...d, { kind: 'assistant', text: streamText }]);
+      }
 
-      addMessage(sessionRef.current, 'assistant', full);
-      setDisplay((d) => [...d, { kind: 'assistant', text: full }]);
-
-      // Update running totals
       const tIn = estimateTokens(messages.map((m) => m.content).join(' '));
-      const tOut = estimateTokens(full);
+      const tOut = estimateTokens(streamText);
       const usage = { input: Math.round(tIn), output: Math.round(tOut), total: Math.round(tIn + tOut) };
       const cost = calculateCost(router.lastProvider || 'unknown', router.lastModel || model, usage);
       lastProviderRef.current = router.lastProvider || '';
       setTotals((t) => ({ tokensIn: t.tokensIn + usage.input, tokensOut: t.tokensOut + usage.output, cost: t.cost + cost }));
 
-      // Rolling digest update — fire and forget, keeps memory bulletproof
       void updateDigest(router, sessionRef.current, config);
-    } catch (err) {
+    } catch (err: any) {
       stopFlusher();
       setStreaming(null);
-      const msg = err instanceof Error ? err.message : String(err);
-      setDisplay((d) => [...d, { kind: 'error', text: `✗ ${msg}` }]);
-      pushNote('(Your message was saved. Try again or switch model via /model)');
+      interrupted = err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort');
+      if (interrupted) {
+        if (streamText.trim()) {
+          addMessage(sessionRef.current, 'assistant', streamText + '\n\n_(interrupted)_');
+          lastAssistantRef.current = streamText;
+          setDisplay((d) => [...d, { kind: 'assistant', text: streamText }]);
+        }
+        pushNote('⏹ Interrupted.');
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        setDisplay((d) => [...d, { kind: 'error', text: `✗ ${msg}` }]);
+        pushNote('(Your message was saved. Try again or switch model via /model)');
+      }
     } finally {
+      abortRef.current = null;
       setStreaming(null);
       setThinking(false);
       setBusy(false);
+      // Drain queued messages
+      if (queueRef.current.length > 0) {
+        const next = queueRef.current.shift()!;
+        setTimeout(() => void sendToAI(next), 30);
+      }
     }
   };
 
@@ -272,55 +289,51 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     const args = input.slice(cmd.length).trim();
 
     switch (cmd) {
-      case '/quit':
-      case '/exit':
-      case '/q':
+      case '/quit': case '/exit': case '/q':
         exit();
         return true;
 
       case '/help': {
-        const help = [
-          '/quit, /exit, /q   Exit interactive mode',
+        pushNote([
+          '/quit, /exit, /q   Exit',
           '/history           Show conversation history',
-          '/providers         Check all providers (connection + status)',
+          '/sessions          Switch between saved sessions',
+          '/providers         Check all providers',
           '/clear             Clear ALL history & start new session',
-          '/new               Start new session (keep old in scrollback)',
+          '/new               Start new session',
           '/model [name]      Show or change model',
-          '/models            Interactive model picker (search + arrows)',
-          '/agent [auto]      Toggle agent mode (tools); auto skips approval',
+          '/models            Interactive model picker',
+          '/agent [auto]      Toggle agent mode (tools)',
           '/memory            Show long-term memory facts',
           '/remember <k> <v>  Store a fact permanently',
           '/forget <key>      Delete a memory fact',
-          '/skills            List available skills (auto-activate on match)',
-          '/learn <lesson>    Teach me a lesson — stored permanently',
-          '/digest            Show the rolling conversation digest'
-        ].join('\n');
-        pushNote(help);
+          '/skills            List available skills',
+          '/learn <lesson>    Teach me a lesson permanently',
+          '/digest            Show rolling conversation digest',
+          '/theme [name]      Switch theme (' + listThemeNames().join(', ') + ')',
+          '/copy              Copy last AI response to clipboard'
+        ].join('\n'));
         return true;
       }
-
-      case '/digest':
-        pushNote(
-          sessionRef.current.digest
-            ? `Rolling digest (${sessionRef.current.digest.length} chars):\n${sessionRef.current.digest}`
-            : 'No digest yet — it builds automatically when history exceeds the context window.'
-        );
-        return true;
 
       case '/history':
         pushNote(getHistoryText(sessionRef.current, 15));
         return true;
 
-      case '/providers': {
+      case '/sessions':
+        setSessionPickerOpen(true);
+        return true;
+
+      case '/providers':
         pushNote('Validating providers…');
         void (async () => {
           try {
             const results = await router.validateAllKeys();
             const status = router.getProviderStatus();
             const lines = Object.entries(status).map(([name, s]) => {
-              if (!s.enabled) return `○ ${name.padEnd(12)} disabled`;
+              if (!s.enabled) return `○ ${name.padEnd(14)} disabled`;
               const ok = results[name];
-              return `${ok ? '●' : '✗'} ${name.padEnd(12)} ${ok ? 'connected' : 'FAILED'}  (prio ${s.priority}, ${s.models.length} models)`;
+              return `${ok ? '●' : '✗'} ${name.padEnd(14)} ${ok ? 'connected' : 'FAILED'}  (prio ${s.priority})`;
             });
             setDisplay((d) => [...d, { kind: 'note', text: `Providers:\n${lines.join('\n')}` }]);
           } catch (err) {
@@ -328,7 +341,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           }
         })();
         return true;
-      }
 
       case '/clear':
         clearAllHistory();
@@ -347,19 +359,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         setPickerOpen(true);
         return true;
 
-      case '/agent': {
-        if (args === 'auto') {
-          config.settings.agentAutoApprove = !config.settings.agentAutoApprove;
-          pushNote(`Agent auto-approve: ${config.settings.agentAutoApprove ? 'ON (tools run without asking)' : 'OFF (asks before write/run)'}`);
-          return true;
-        }
-        setAgentMode((v) => !v);
-        pushNote(agentMode
-          ? '🤖 Agent mode OFF — back to plain chat.'
-          : '🤖 Agent mode ON — I can read/write files, run commands, and search code. Sensitive actions ask first (/agent auto to skip asking).');
-        return true;
-      }
-
       case '/model': {
         if (args) {
           sessionRef.current.model = args;
@@ -367,28 +366,29 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           setHeaderModel(args);
           pushNote(`✓ Model changed to: ${args}`);
         } else {
-          const status = router.getProviderStatus();
-          const lines = Object.entries(status)
-            .filter(([, s]) => s.enabled && s.models.length > 0)
-            .map(([name, s]) => {
-              const shown = s.models.slice(0, 4).join(', ');
-              const more = s.models.length > 4 ? ` …(+${s.models.length - 4})` : '';
-              return `${name}: ${shown}${more}`;
-            });
-          pushNote(
-            `Current model: ${sessionRef.current.model}\n` +
-            (lines.length ? `\nAvailable:\n${lines.join('\n')}\n` : '') +
-            `\nUsage: /model <name> or /models for interactive picker`
-          );
+          pushNote(`Current model: ${sessionRef.current.model}\nUsage: /model <name> or /models for interactive picker`);
         }
+        return true;
+      }
+
+      case '/agent': {
+        if (args === 'auto') {
+          config.settings.agentAutoApprove = !config.settings.agentAutoApprove;
+          saveConfig(config);
+          pushNote(`Agent auto-approve: ${config.settings.agentAutoApprove ? 'ON' : 'OFF'}`);
+          return true;
+        }
+        setAgentMode((v) => !v);
+        pushNote(agentMode
+          ? '🤖 Agent mode OFF.'
+          : '🤖 Agent mode ON — I can read/write files, run commands, search code. Sensitive actions ask first (/agent auto to skip).');
         return true;
       }
 
       case '/memory': {
         const facts = getAllFacts();
-        if (facts.length === 0) {
-          pushNote('Long-term memory is empty. Say "remember that ..." to store facts.');
-        } else {
+        if (facts.length === 0) pushNote('Long-term memory is empty.');
+        else {
           const lines = facts.map((f) => `${f.key}${f.source === 'auto' ? ' [auto]' : ' [manual]'}: ${f.value}`);
           pushNote(`Long-term memory (${facts.length} facts):\n${lines.join('\n')}`);
         }
@@ -397,49 +397,72 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
 
       case '/skills': {
         const all = listSkills();
-        if (all.length === 0) {
-          pushNote('No skills found. Add SKILL.md files to ~/.config/octapus/skills/<name>/');
-        } else {
-          const lines = all.map((s) => `${s.name.padEnd(30)} ${s.source === 'user' ? '[custom]' : '[bundled]'} — ${s.description.slice(0, 70)}`);
+        if (all.length === 0) pushNote('No skills found.');
+        else {
+          const lines = all.map((s) => `${s.name.padEnd(30)} — ${s.description.slice(0, 60)}`);
           pushNote(`Skills (${all.length}) — auto-activated when relevant:\n${lines.join('\n')}`);
-        }
-        return true;
-      }
-
-      case '/learn': {
-        // Explicit self-development: store a lesson for future sessions
-        if (!args || args.length < 10) {
-          pushNote('Usage: /learn <lesson>  e.g. /learn PowerShell 5.1 has no && operator, use ; or if ($?)');
-        } else {
-          rememberFact(`lesson.${args.split(/\s+/).slice(0, 4).join('-').toLowerCase().replace(/[^a-z0-9-]/g, '')}`, args, 'manual');
-          refreshMemoryCount();
-          pushNote(`🧠 Lesson stored — I'll apply it from now on:\n${args}`);
         }
         return true;
       }
 
       case '/remember': {
         const spaceIdx = args.indexOf(' ');
-        if (!args || spaceIdx === -1) {
-          pushNote('Usage: /remember <key> <value>');
-        } else {
-          const key = args.slice(0, spaceIdx).trim();
-          const value = args.slice(spaceIdx + 1).trim();
-          rememberFact(key, value, 'manual');
+        if (!args || spaceIdx === -1) pushNote('Usage: /remember <key> <value>');
+        else {
+          rememberFact(args.slice(0, spaceIdx).trim(), args.slice(spaceIdx + 1).trim(), 'manual');
           refreshMemoryCount();
-          pushNote(`✓ Remembered ${key} = ${value}`);
+          pushNote(`✓ Remembered.`);
         }
         return true;
       }
 
       case '/forget': {
-        if (!args) {
-          pushNote('Usage: /forget <key>');
-        } else if (forgetFact(args.trim())) {
+        if (!args) pushNote('Usage: /forget <key>');
+        else if (forgetFact(args.trim())) { refreshMemoryCount(); pushNote(`✓ Forgot: ${args.trim()}`); }
+        else pushNote(`Key not found: ${args.trim()}`);
+        return true;
+      }
+
+      case '/learn': {
+        if (!args || args.length < 10) pushNote('Usage: /learn <lesson>');
+        else {
+          rememberFact(`lesson.${args.split(/\s+/).slice(0, 4).join('-').toLowerCase().replace(/[^a-z0-9-]/g, '')}`, args, 'manual');
           refreshMemoryCount();
-          pushNote(`✓ Forgot: ${args.trim()}`);
+          pushNote(`🧠 Lesson stored:\n${args}`);
+        }
+        return true;
+      }
+
+      case '/digest':
+        pushNote(
+          sessionRef.current.digest
+            ? `Rolling digest:\n${sessionRef.current.digest}`
+            : 'No digest yet — builds automatically when history exceeds the context window.'
+        );
+        return true;
+
+      case '/theme': {
+        if (!args) {
+          pushNote(`Current theme: ${theme.name}. Available: ${listThemeNames().join(', ')}\nUsage: /theme <name>`);
+        } else if (listThemeNames().includes(args)) {
+          config.settings.theme = args;
+          saveConfig(config);
+          pushNote(`✓ Theme switched to: ${args} (fully applied on next launch)`);
         } else {
-          pushNote(`Key not found: ${args.trim()}`);
+          pushNote(`Unknown theme: ${args}. Available: ${listThemeNames().join(', ')}`);
+        }
+        return true;
+      }
+
+      case '/copy': {
+        const text = lastAssistantRef.current;
+        if (!text) { pushNote('Nothing to copy yet.'); return true; }
+        try {
+          const isWin = process.platform === 'win32';
+          execSync(isWin ? 'clip' : process.platform === 'darwin' ? 'pbcopy' : 'xclip -selection clipboard', { input: text, stdio: ['pipe', 'ignore', 'ignore'] } as any);
+          pushNote(`📋 Copied ${text.length} chars to clipboard.`);
+        } catch {
+          pushNote('Clipboard copy failed on this platform.');
         }
         return true;
       }
@@ -451,42 +474,46 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   };
 
   const handleSubmit = (value: string) => {
-    if (busy) return;
-    if (value.startsWith('/')) {
-      handleSlash(value);
+    if (busy) {
+      queueRef.current.push(value);
+      pushNote(`⏳ Queued (${queueRef.current.length} pending)`);
       return;
     }
+    if (value.startsWith('/')) { handleSlash(value); return; }
     void sendToAI(value);
   };
 
-  // Ctrl+C handled by ink (exitOnCtrlC default)
-
   return (
     <Box flexDirection="column">
-      {/* Completed messages — rendered once into terminal scrollback */}
       <Static items={display}>
         {(item: DisplayItem, i: number) => (
           <Box key={i} flexDirection="column" marginTop={1}>
             {item.kind === 'user' && (
               <Box>
-                <Text color="green" bold>{'You › '}</Text>
-                <Text color="white">{item.text}</Text>
+                <Text color={theme.userLabel} bold>{'You › '}</Text>
+                <Text color={theme.userText}>{item.text}</Text>
               </Box>
             )}
             {item.kind === 'assistant' && (
               <Box flexDirection="column">
-                <Text color="cyan" bold>{'Octapus ›'}</Text>
+                <Text color={theme.aiLabel} bold>{'Octapus ›'}</Text>
                 <Text>{renderMarkdown(item.text)}</Text>
               </Box>
             )}
             {item.kind === 'note' && (
-              <Box paddingLeft={2}>
-                <Text dim italic>{item.text}</Text>
-              </Box>
+              <Box paddingLeft={2}><Text dim italic>{item.text}</Text></Box>
             )}
             {item.kind === 'error' && (
-              <Box paddingLeft={2}>
-                <Text color="red">{item.text}</Text>
+              <Box paddingLeft={2}><Text color={theme.error}>{item.text}</Text></Box>
+            )}
+            {item.kind === 'diff' && (
+              <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
+                <Text color={theme.highlight} bold>{item.title}</Text>
+                {item.lines.map((l, li) => (
+                  <Text key={li} color={l.startsWith('+') ? theme.success : l.startsWith('-') ? theme.error : undefined}>
+                    {l}
+                  </Text>
+                ))}
               </Box>
             )}
           </Box>
@@ -494,31 +521,29 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       </Static>
 
       {/* Header */}
-      <Box borderStyle="round" borderColor="cyan" flexDirection="column" paddingX={1} marginTop={display.length === 0 ? 0 : 1}>
+      <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} marginTop={display.length === 0 ? 0 : 1}>
         <Text>
-          <Text color="magenta" bold>🐙 Octapus</Text>
-          <Text dim> multi-provider AI CLI</Text>
+          <Text color={theme.accent} bold>🐙 Octapus</Text>
+          <Text dim> multi-provider AI CLI{agentMode ? ' ' : ''}{agentMode && <Text color={theme.warn} bold>[AGENT]</Text>}</Text>
         </Text>
         <Text dim>
-          model: <Text color="yellow">{headerModel}</Text>
-          {'  │  '}session: <Text color="yellow">{headerSessionId}</Text>
-          {'  │  '}memory: <Text color="yellow">{memoryCount}</Text> facts
-          {'  │  '}providers: <Text color="yellow">{enabledCount}</Text> enabled
+          model: <Text color={theme.highlight}>{headerModel}</Text>
+          {'  │  '}session: <Text color={theme.highlight}>{headerSessionId}</Text>
+          {'  │  '}memory: <Text color={theme.highlight}>{memoryCount}</Text>
+          {'  │  '}providers: <Text color={theme.highlight}>{enabledCount}</Text>
         </Text>
-        <Text dim>/help for commands · /providers to check connections</Text>
+        <Text dim>/help commands · /models picker · /agent tools · esc interrupts</Text>
       </Box>
 
-      {/* Streaming area */}
+      {/* Streaming */}
       {(thinking || streaming !== null) && (
         <Box flexDirection="column" marginTop={1} paddingLeft={2}>
-          {thinking && <Spinner label="Thinking..." />}
-          {streaming !== null && (
-            <Text>{renderMarkdown(streaming)}</Text>
-          )}
+          {thinking && <Spinner label="Thinking… (esc to interrupt)" color={theme.accent} />}
+          {streaming !== null && <Text>{renderMarkdown(streaming)}</Text>}
         </Box>
       )}
 
-      {/* Model picker overlay */}
+      {/* Model picker */}
       {pickerOpen && (
         <Box marginTop={1}>
           <ModelPicker
@@ -536,23 +561,37 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
-      {/* Approval prompt for sensitive tools */}
+      {/* Session picker */}
+      {sessionPickerOpen && (
+        <Box marginTop={1}>
+          <SessionPicker
+            currentSessionId={headerSessionId}
+            onSelect={(s) => {
+              sessionRef.current = s;
+              setHeaderSessionId(s.id);
+              setHeaderModel(s.model);
+              setSessionPickerOpen(false);
+              pushNote(`✓ Loaded session ${s.id} — "${s.title}" (${s.messages.filter(m => m.role !== 'system').length} messages). New replies continue this session.`);
+            }}
+            onClose={() => setSessionPickerOpen(false)}
+          />
+        </Box>
+      )}
+
+      {/* Approval */}
       {pendingApproval && (
         <ApprovalPrompt
           tool={pendingApproval.tool}
           summary={pendingApproval.summary}
-          onDecision={(ok) => {
-            pendingApproval.resolve(ok);
-            setPendingApproval(null);
-          }}
+          onDecision={(ok) => { pendingApproval.resolve(ok); setPendingApproval(null); }}
         />
       )}
 
       {/* Input */}
-      {!pickerOpen && !pendingApproval && (
+      {!pickerOpen && !sessionPickerOpen && !pendingApproval && (
         <Box marginTop={1}>
           <TextInput
-            placeholder={busy ? '' : 'Type a message… (/help for commands)'}
+            placeholder={busy ? (queueRef.current.length ? `queued: ${queueRef.current.length}` : 'esc to interrupt…') : 'Type a message… (/help for commands)'}
             disabled={busy}
             history={inputHistory}
             onSubmit={handleSubmit}
@@ -563,15 +602,14 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       {/* Status bar */}
       <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
         <Text dim>
-          <Text color="green">● </Text>
+          <Text color={theme.success}>● </Text>
           {lastProviderRef.current || 'ready'}
-          {'  │  '}
-          {headerModel}
+          {'  │  '}{headerModel}
+          {agentMode ? `  │  ${agentMode ? '🤖 agent' : ''}` : ''}
         </Text>
         <Text dim>
           {totals.tokensIn.toLocaleString()}→{totals.tokensOut.toLocaleString()} tok
-          {'  │  '}
-          <Text color={totals.cost === 0 ? 'green' : 'yellow'}>{formatCost(totals.cost)}</Text>
+          {'  │  '}<Text color={totals.cost === 0 ? theme.success : theme.warn}>{formatCost(totals.cost)}</Text>
         </Text>
       </Box>
     </Box>

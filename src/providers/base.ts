@@ -26,6 +26,8 @@ export interface ChatOptions {
   disableFallback?: boolean;
   /** Router-level flag: suppress console notifications (used by TUI mode) */
   quiet?: boolean;
+  /** Abort signal for interrupting generation (Esc in TUI) */
+  signal?: AbortSignal;
 }
 
 export interface Tool {

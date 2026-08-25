@@ -9,8 +9,8 @@ export interface AgentCallbacks {
   onText: (chunk: string) => void;
   /** A tool is about to run (after approval) */
   onToolStart: (name: string, args: string) => void;
-  /** A tool finished */
-  onToolResult: (name: string, ok: boolean, output: string) => void;
+  /** A tool finished — diff present for file writes */
+  onToolResult: (name: string, ok: boolean, output: string, diff?: string[]) => void;
   /** Ask the user to approve a sensitive action */
   approval?: ToolApproval;
 }
@@ -51,7 +51,8 @@ export async function runAgentTurn(
         stream: true,
         tools: AGENT_TOOLS,
         disableFallback: options.fallback === false,
-        quiet: true
+        quiet: true,
+        signal: options.signal
       },
       fallbackModels: options.fallback ? config.fallbackModels : []
     })) {
@@ -92,7 +93,7 @@ export async function runAgentTurn(
 
       const result = await executeTool(call.function.name, call.function.arguments, process.cwd(), cb.approval);
       cb.onToolStart(call.function.name, argsPreview);
-      cb.onToolResult(call.function.name, result.ok, result.output);
+      cb.onToolResult(call.function.name, result.ok, result.output, result.diff);
 
       messages.push({
         role: 'tool',

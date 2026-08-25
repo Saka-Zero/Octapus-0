@@ -53,7 +53,8 @@ export async function* streamOpenAI(opts: {
   const res = await fetch(`${baseURL}/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: options.signal
   });
 
   if (!res.ok || !res.body) {

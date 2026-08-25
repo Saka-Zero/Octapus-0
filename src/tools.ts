@@ -6,11 +6,50 @@ import { Tool } from './providers';
 export interface ToolResult {
   ok: boolean;
   output: string;
+  /** Unified-ish diff lines for file writes (for colored TUI rendering) */
+  diff?: string[];
 }
 
 const MAX_OUTPUT = 8000;
 const MAX_FILE_WRITE = 512 * 1024;
 const CMD_TIMEOUT_MS = 60_000;
+
+/**
+ * Compact line diff between old and new content.
+ * Common prefix/suffix trimmed, changed region shown with ±3 context lines.
+ */
+export function diffLines(oldContent: string, newContent: string, maxLines = 60): string[] {
+  const a = oldContent.split('\n');
+  const b = newContent.split('\n');
+
+  if (oldContent === newContent) return [];
+
+  // Trim common prefix
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  // Trim common suffix
+  let endA = a.length - 1, endB = b.length - 1;
+  while (endA >= start && endB >= start && a[endA] === b[endB]) { endA--; endB--; }
+
+  const ctx = 3;
+  const out: string[] = [];
+
+  // Context before change
+  for (let i = Math.max(0, start - ctx); i < start; i++) out.push(`  ${a[i]}`);
+  // Removed lines (old only)
+  for (let i = start; i <= endA; i++) out.push(`- ${a[i]}`);
+  // Added lines (new only)
+  for (let i = start; i <= endB; i++) out.push(`+ ${b[i]}`);
+  // Context after change (common suffix)
+  for (let i = endA + 1; i <= Math.min(a.length - 1, endA + ctx); i++) out.push(`  ${a[i]}`);
+
+  if (out.length > maxLines) {
+    const kept = out.slice(0, maxLines);
+    kept.push(`… (+${out.length - maxLines} more diff lines)`);
+    return kept;
+  }
+  return out;
+}
 
 /** Patterns we refuse to run even with approval */
 const DANGEROUS = [
@@ -152,13 +191,23 @@ async function doWriteFile(p: string, content: string, approve?: ToolApproval): 
   try {
     if (content.length > MAX_FILE_WRITE) return { ok: false, output: 'Content too large (>512KB)' };
     const resolved = path.resolve(p);
+    const existed = fs.existsSync(resolved);
+    const oldContent = existed ? fs.readFileSync(resolved, 'utf8') : '';
+
     if (approve) {
-      const ok = await approve('write_file', `${resolved} (${content.length} bytes)`);
+      const action = existed ? `edit ${resolved}` : `create ${resolved}`;
+      const ok = await approve('write_file', `${action} (${content.length} bytes)`);
       if (!ok) return { ok: false, output: 'User denied this write.' };
     }
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     fs.writeFileSync(resolved, content, 'utf8');
-    return { ok: true, output: `Wrote ${content.length} bytes to ${resolved}` };
+
+    const diff = diffLines(oldContent, content);
+    return {
+      ok: true,
+      output: `${existed ? 'Updated' : 'Created'} ${resolved} (${content.length} bytes)`,
+      diff
+    };
   } catch (e) {
     return { ok: false, output: `write_file failed: ${e instanceof Error ? e.message : e}` };
   }
