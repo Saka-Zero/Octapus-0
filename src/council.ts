@@ -62,6 +62,17 @@ export async function runCouncil(
   const participants: Participant[] = chosen
     .map(([name, s]) => ({ provider: name, role: config.providers[name]?.role || 'general', model: s.models[0] }));
 
+  // The user's default model (their strongest configured model) leads the
+  // council and chairs the synthesis whenever it's healthy.
+  const leadProvider = router.getProviderForModel(config.defaultModel);
+  if (leadProvider) {
+    const idx = participants.findIndex((p) => p.provider === leadProvider.name);
+    if (idx > 0) {
+      const [lead] = participants.splice(idx, 1);
+      participants.unshift(lead);
+    }
+  }
+
   if (participants.length < 2) {
     throw new Error('Council needs at least 2 active providers.');
   }
@@ -188,7 +199,12 @@ export async function runCouncil(
 
   // ─── ROUND 3: Synthesis ───────────────────────────────────────────
   cb.onPhase('⚖️ ROUND 3 — Synthesis into final answer');
-  const chairman = analyses[0].p; // highest-priority successful participant
+  // Chairman = the user's default (strongest) model if it participated,
+  // otherwise the highest-priority successful participant
+  const lead = router.getProviderForModel(config.defaultModel);
+  const chairEntry =
+    analyses.find((a) => a.p.provider === lead?.name) || analyses[0];
+  const chairman = chairEntry.p;
   const synthesisInput = [
     `ORIGINAL QUESTION:\n${prompt}`,
     `\nSPECIALIST ANALYSES:\n${analyses.map((a) => `=== ${a.p.provider} (${a.p.role}) ===\n${a.text}`).join('\n\n')}`,

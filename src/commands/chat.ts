@@ -458,7 +458,8 @@ async function sendMessage(
     let spinnerStopped = false;
 
     // Council mode (default ON): all specialists deliberate → one super answer
-    if (config.settings.councilMode !== false && !options.noCouncil) {
+    const councilEnabled = config.settings.councilMode !== false && options.council !== false;
+    if (councilEnabled) {
       const { runCouncil } = await import('../council');
       const result = await runCouncil(router, prompt, messages, config, options, {
         onPhase: (p) => { if (!spinnerStopped) { spinner.stop(); spinnerStopped = true; } console.log(chalk.gray(`  ${p}`)); },
