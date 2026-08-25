@@ -19,23 +19,6 @@ export function formatTokens(input: number, output: number): string {
   return `Tokens: ${input.toLocaleString()} in / ${output.toLocaleString()} out`;
 }
 
-export function estimateCost(provider: string, inputTokens: number, outputTokens: number): number {
-  const rates: Record<string, { input: number; output: number }> = {
-    groq: { input: 0, output: 0 }, // Free tier
-    cerebras: { input: 0, output: 0 }, // Free tier
-    gemini: { input: 0, output: 0 }, // Free tier
-    sambanova: { input: 0, output: 0 }, // Free tier
-    ollama: { input: 0, output: 0 }, // Local
-    together: { input: 0.0001, output: 0.0003 },
-    openrouter: { input: 0.00015, output: 0.0006 },
-    novita: { input: 0.0001, output: 0.0003 },
-    requesty: { input: 0.00015, output: 0.0006 }
-  };
-  
-  const rate = rates[provider] || { input: 0, output: 0 };
-  return (inputTokens * rate.input + outputTokens * rate.output) / 1000;
-}
-
 export function formatCost(cost: number): string {
   if (cost === 0) return chalk.green('Free');
   if (cost < 0.01) return chalk.yellow(`$${cost.toFixed(4)}`);

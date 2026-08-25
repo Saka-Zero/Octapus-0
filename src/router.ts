@@ -1,10 +1,21 @@
 import { Provider, Message, ChatOptions, RouterOptions } from './providers';
 import { loadConfig } from './config';
+import chalk from 'chalk';
+
+export interface ChatResult {
+  provider: string;
+  model: string;
+  stream: AsyncIterable<string>;
+}
 
 export class Router {
   private providers: Map<string, Provider> = new Map();
   private modelToProvider: Map<string, string> = new Map();
   private config = loadConfig();
+  
+  // Track last used provider/model for stats
+  public lastProvider: string = '';
+  public lastModel: string = '';
 
   register(provider: Provider): void {
     this.providers.set(provider.name, provider);
@@ -33,26 +44,30 @@ export class Router {
     return undefined;
   }
 
-  getFallbackChain(model: string): Provider[] {
-    const chain: Provider[] = [];
+  getFallbackChain(model: string): Array<{ provider: Provider; modelToUse: string }> {
+    const chain: Array<{ provider: Provider; modelToUse: string }> = [];
     const primary = this.getProviderForModel(model);
-    if (primary) chain.push(primary);
+    if (primary) {
+      const modelToUse = primary.models.includes(model) ? model : primary.models[0];
+      chain.push({ provider: primary, modelToUse });
+    }
 
     // Add fallback models from config
     for (const fallbackModel of this.config.fallbackModels) {
       if (fallbackModel === model) continue;
       const provider = this.getProviderForModel(fallbackModel);
-      if (provider && !chain.includes(provider)) {
-        chain.push(provider);
+      if (provider && !chain.some(c => c.provider === provider)) {
+        const modelToUse = provider.models.includes(fallbackModel) ? fallbackModel : provider.models[0];
+        chain.push({ provider, modelToUse });
       }
     }
 
     // Add any other enabled providers (skip if not enabled)
     for (const provider of this.providers.values()) {
-      if (!chain.includes(provider)) {
+      if (!chain.some(c => c.provider === provider)) {
         const cfg = this.config.providers[provider.name];
-        if (cfg?.enabled) {
-          chain.push(provider);
+        if (cfg?.enabled && provider.models.length > 0) {
+          chain.push({ provider, modelToUse: provider.models[0] });
         }
       }
     }
@@ -69,16 +84,18 @@ export class Router {
     }
 
     let lastError: Error | null = null;
+    let isFirstChunk = true;
 
-    for (const provider of chain) {
+    for (const { provider, modelToUse } of chain) {
       try {
-        // Skip providers with no models available
-        if (provider.models.length === 0) {
-          lastError = new Error(`${provider.name} has no models available`);
-          continue;
+        // Track which provider/model we're using
+        this.lastProvider = provider.name;
+        this.lastModel = modelToUse;
+        
+        // Notify user if we're using a different model
+        if (modelToUse !== model && isFirstChunk) {
+          console.error(chalk.gray(`  (Using ${modelToUse} from ${provider.name} as fallback)`));
         }
-        // Check if provider supports the model
-        const modelToUse = provider.models.includes(model) ? model : provider.models[0];
         
         yield* provider.chat(messages, {
           ...chatOptions,
@@ -87,7 +104,8 @@ export class Router {
         return; // Success
       } catch (err) {
         lastError = err as Error;
-        console.error(`[${provider.name}] failed: ${err instanceof Error ? err.message : String(err)}`);
+        // Use styled error output instead of console.error
+        console.log(chalk.gray(`  [${provider.name}] ${err instanceof Error ? err.message : String(err)}`));
         continue;
       }
     }

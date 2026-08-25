@@ -57,7 +57,9 @@ export function loadConfig(): Config {
     const content = fs.readFileSync(CONFIG_FILE, 'utf8');
     const loaded = yaml.load(content) as Partial<Config>;
     return deepMerge(DEFAULT_CONFIG, loaded);
-  } catch {
+  } catch (err) {
+    // Warn user about invalid config but don't crash
+    console.warn(`Warning: Invalid config file at ${CONFIG_FILE}, using defaults`);
     return DEFAULT_CONFIG;
   }
 }

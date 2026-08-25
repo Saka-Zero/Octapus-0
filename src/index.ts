@@ -12,6 +12,7 @@ import { CerebrasProvider } from './providers/cerebras';
 import { SambaNovaProvider } from './providers/sambanova';
 import { TogetherProvider } from './providers/together';
 import { NovitaProvider } from './providers/novita';
+import { OpenAICompatibleProvider } from './providers/openai-compatible';
 import { createChatCommand } from './commands/chat';
 import { createConfigCommand } from './commands/config';
 import { createModelsCommand } from './commands/models';
@@ -74,7 +75,6 @@ function registerProviders(): void {
     if (knownProviders.includes(name)) continue;
     if (!cfg?.enabled || !cfg.apiKey || !cfg.baseURL) continue;
     // Create a generic OpenAI-compatible provider
-    const { OpenAICompatibleProvider } = require('./providers/openai-compatible');
     router.register(new OpenAICompatibleProvider(name, cfg.apiKey, cfg.baseURL, cfg.priority ?? 1));
   }
 }
