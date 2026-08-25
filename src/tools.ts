@@ -17,6 +17,18 @@ export function getPermissions(): PermissionMap {
   return activePermissions;
 }
 
+// ─── Plan/Act mode (Cline pattern) ──────────────────────────────────
+let planModeActive = false;
+export function setPlanMode(active: boolean): void {
+  planModeActive = active;
+}
+export function isPlanMode(): boolean {
+  return planModeActive;
+}
+
+/** Tools allowed while planning — read-only research */
+export const PLAN_ALLOWED = new Set(['read_file', 'list_dir', 'search_files', 'web_search', 'web_fetch']);
+
 export interface ToolResult {
   ok: boolean;
   output: string;
@@ -215,6 +227,20 @@ export const AGENT_TOOLS: Tool[] = [
         required: ['url']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'switch_to_act_mode',
+      description: 'Request to exit plan mode and begin executing your implementation plan. Only call this after presenting a complete numbered plan.',
+      parameters: {
+        type: 'object',
+        properties: {
+          plan_summary: { type: 'string', description: 'Brief summary of the approved plan you will execute' }
+        },
+        required: ['plan_summary']
+      }
+    }
   }
 ];
 
@@ -257,6 +283,15 @@ export async function executeTool(
     return { ok: false, output: `BLOCKED: tool "${name}" is denied by permissions config.` };
   }
   if (perm === 'allow') effectiveApprove = undefined;
+
+  // PLAN MODE gate (Cline pattern): research-only. Mutating tools are blocked
+  // with an instruction telling the model to produce a plan instead.
+  if (planModeActive && !PLAN_ALLOWED.has(name)) {
+    return {
+      ok: false,
+      output: `BLOCKED: plan mode is active — only read/research tools allowed. Research the task, then present a numbered implementation plan and request switch_to_act_mode to begin execution.`
+    };
+  }
 
   // Unified ask-gate honoring perm==='ask' for EVERY tool:
   // - agent context: delegate to the interactive approval callback

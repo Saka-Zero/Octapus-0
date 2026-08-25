@@ -1,6 +1,6 @@
 import { Router } from './router';
 import { Message, ToolCall } from './providers';
-import { AGENT_TOOLS, executeTool, notifyAfterTool, ToolApproval } from './tools';
+import { AGENT_TOOLS, executeTool, notifyAfterTool, ToolApproval, isPlanMode, setPlanMode, PLAN_ALLOWED } from './tools';
 import { pluginBeforeRequest } from './plugins';
 
 const MAX_ITERATIONS = 15;
@@ -14,6 +14,8 @@ export interface AgentCallbacks {
   onToolResult: (name: string, ok: boolean, output: string, diff?: string[]) => void;
   /** Ask the user to approve a sensitive action */
   approval?: ToolApproval;
+  /** Plan mode elevation request — resolve(true) switches to act mode */
+  onPlanRequest?: (planSummary: string) => Promise<boolean>;
 }
 
 export interface AgentTurnResult {
@@ -42,6 +44,11 @@ export async function runAgentTurn(
     let turnText = '';
     let calls: ToolCall[] | null = null;
 
+    // Plan mode restricts the toolset to research-only + elevation request
+    const activeTools = isPlanMode()
+      ? AGENT_TOOLS.filter((t) => PLAN_ALLOWED.has(t.function.name) || t.function.name === 'switch_to_act_mode')
+      : AGENT_TOOLS;
+
     for await (const ev of router.chat({
       model,
       messages,
@@ -50,7 +57,7 @@ export async function runAgentTurn(
         temperature: options.temperature ?? config.settings.temperature,
         maxTokens: options.maxTokens ?? config.settings.maxTokens,
         stream: true,
-        tools: AGENT_TOOLS,
+        tools: activeTools,
         disableFallback: options.fallback === false,
         quiet: true,
         signal: options.signal
@@ -86,6 +93,22 @@ export async function runAgentTurn(
         continue;
       }
       toolCallsMade++;
+
+      // Plan-mode elevation: model requests switch to act mode
+      if (call.function.name === 'switch_to_act_mode') {
+        let summary = '';
+        try { summary = JSON.parse(call.function.arguments || '{}').plan_summary || ''; } catch {}
+        const approved = cb.onPlanRequest ? await cb.onPlanRequest(summary) : true;
+        setPlanMode(!approved); // approved → exit plan mode
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: approved
+            ? 'APPROVED. Act mode active — full toolset unlocked. Execute your plan now, step by step.'
+            : 'DENIED. Stay in plan mode — refine your research or plan further.'
+        });
+        continue;
+      }
 
       let argsPreview = call.function.arguments;
       try {

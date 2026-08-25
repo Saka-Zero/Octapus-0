@@ -11,6 +11,7 @@ import { TextInput } from './TextInput';
 import { ModelPicker } from './ModelPicker';
 import { SessionPicker } from './SessionPicker';
 import { runAgentTurn } from '../agent';
+import { setPlanMode, isPlanMode } from '../tools';
 import { getTheme, listThemeNames } from './theme';
 import { execSync } from 'child_process';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS, Domain } from '../utils/roles';
@@ -264,6 +265,10 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
             new Promise<boolean>((resolve) => {
               if (config.settings.agentAutoApprove) return resolve(true);
               setPendingApproval({ tool, summary, resolve });
+            }),
+          onPlanRequest: (planSummary) =>
+            new Promise<boolean>((resolve) => {
+              setPendingApproval({ tool: 'switch_to_act_mode', summary: planSummary || 'Begin executing the presented plan', resolve });
             })
         });
         streamText = result.finalText || streamText;
@@ -373,6 +378,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/model [name]      Show or change model',
           '/models            Interactive model picker',
           '/agent [auto]      Toggle agent mode (tools)',
+          '/plan              Plan mode: research only, approve before execute',
           '/council           Council mode: all AIs debate → 1 super answer',
           '/memory            Show long-term memory facts',
           '/remember <k> <v>  Store a fact permanently',
@@ -598,6 +604,19 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
             pushNote(`Compact failed: ${e instanceof Error ? e.message : e}`);
           }
         })();
+        return true;
+      }
+
+      case '/plan': {
+        if (!agentMode) {
+          pushNote('Plan mode requires agent mode. Enable /agent first.');
+          return true;
+        }
+        const next = !isPlanMode();
+        setPlanMode(next);
+        pushNote(next
+          ? '📋 PLAN MODE ON — research only. I will investigate, then present a numbered plan for your approval before touching anything.'
+          : '🔨 PLAN MODE OFF — act mode. Full toolset unlocked.');
         return true;
       }
 
