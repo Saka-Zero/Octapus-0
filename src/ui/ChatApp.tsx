@@ -67,6 +67,10 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const [totals, setTotals] = useState({ tokensIn: 0, tokensOut: 0, cost: 0 });
   const lastProviderRef = useRef('');
 
+  // Count enabled providers once for the header
+  const enabledCount = Object.values(config.providers as Record<string, { enabled?: boolean }>)
+    .filter((p) => p.enabled).length;
+
   const pushNote = (text: string) => setDisplay((d) => [...d, { kind: 'note', text }]);
   const refreshMemoryCount = () => setMemoryCount(getAllFacts().length);
 
@@ -154,6 +158,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         const help = [
           '/quit, /exit, /q   Exit interactive mode',
           '/history           Show conversation history',
+          '/providers         Check all providers (connection + status)',
           '/clear             Clear ALL history & start new session',
           '/new               Start new session (keep old in scrollback)',
           '/model [name]      Show or change model',
@@ -168,6 +173,25 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       case '/history':
         pushNote(getHistoryText(sessionRef.current, 15));
         return true;
+
+      case '/providers': {
+        pushNote('Validating providers…');
+        void (async () => {
+          try {
+            const results = await router.validateAllKeys();
+            const status = router.getProviderStatus();
+            const lines = Object.entries(status).map(([name, s]) => {
+              if (!s.enabled) return `○ ${name.padEnd(12)} disabled`;
+              const ok = results[name];
+              return `${ok ? '●' : '✗'} ${name.padEnd(12)} ${ok ? 'connected' : 'FAILED'}  (prio ${s.priority}, ${s.models.length} models)`;
+            });
+            setDisplay((d) => [...d, { kind: 'note', text: `Providers:\n${lines.join('\n')}` }]);
+          } catch (err) {
+            setDisplay((d) => [...d, { kind: 'error', text: `Provider check failed: ${err instanceof Error ? err.message : String(err)}` }]);
+          }
+        })();
+        return true;
+      }
 
       case '/clear':
         clearAllHistory();
@@ -189,7 +213,19 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           setHeaderModel(args);
           pushNote(`✓ Model changed to: ${args}`);
         } else {
-          pushNote(`Current model: ${sessionRef.current.model} — usage: /model <name>`);
+          const status = router.getProviderStatus();
+          const lines = Object.entries(status)
+            .filter(([, s]) => s.enabled && s.models.length > 0)
+            .map(([name, s]) => {
+              const shown = s.models.slice(0, 4).join(', ');
+              const more = s.models.length > 4 ? ` …(+${s.models.length - 4})` : '';
+              return `${name}: ${shown}${more}`;
+            });
+          pushNote(
+            `Current model: ${sessionRef.current.model}\n` +
+            (lines.length ? `\nAvailable:\n${lines.join('\n')}\n` : '') +
+            `\nUsage: /model <model-name>`
+          );
         }
         return true;
       }
@@ -290,8 +326,9 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           model: <Text color="yellow">{headerModel}</Text>
           {'  │  '}session: <Text color="yellow">{headerSessionId}</Text>
           {'  │  '}memory: <Text color="yellow">{memoryCount}</Text> facts
+          {'  │  '}providers: <Text color="yellow">{enabledCount}</Text> enabled
         </Text>
-        <Text dim>/help for commands</Text>
+        <Text dim>/help for commands · /providers to check connections</Text>
       </Box>
 
       {/* Streaming area */}
