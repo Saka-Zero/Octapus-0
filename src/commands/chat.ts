@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
+import * as readline from 'readline';
 import { Router } from '../router';
 import { loadConfig, saveConfig, maskApiKey } from '../config';
 import { createSpinner, formatCost, formatDuration, formatUsage, estimateTokens } from '../utils';
@@ -80,22 +81,6 @@ export function createChatCommand(router: Router): Command {
         console.log(getHistoryText(session, 20));
         return;
       }
-      
-      // If no prompt provided, show usage hint (before provider check so --help works)
-      if (!prompt) {
-        console.log(chalk.cyan('Octapus Chat'));
-        console.log();
-        console.log(chalk.white('Usage:'));
-        console.log(chalk.gray('  octapus chat "Hello, world!"'));
-        console.log(chalk.gray('  octapus chat -m gemini-1.5-pro-latest "Explain quantum computing"'));
-        console.log(chalk.gray('  octapus chat --new "Start fresh conversation"'));
-        console.log(chalk.gray('  octapus chat --history'));
-        console.log(chalk.gray('  octapus chat --sessions'));
-        console.log();
-        console.log(chalk.gray('Your conversations are automatically saved and remembered.'));
-        console.log(chalk.gray('Use --new to start fresh, --history to see recent messages.'));
-        return;
-      }
 
       // Check if any provider is enabled
       const enabledProviders = Object.entries(config.providers)
@@ -161,19 +146,15 @@ export function createChatCommand(router: Router): Command {
       let session: ConversationSession;
       
       if (options.continue) {
-        // Continue specific session
         session = loadSession(options.continue) || createSession(model, options.system);
         if (!loadSession(options.continue)) {
           console.log(chalk.yellow(`Session ${options.continue} not found. Starting new session.`));
         }
       } else if (options.new) {
-        // Start new session
         session = createSession(model, options.system);
       } else {
-        // Load existing session or create new one
         session = loadSession() || createSession(model, options.system);
         
-        // Update system prompt if provided
         if (options.system) {
           const existingSystem = session.messages.find(m => m.role === 'system');
           if (existingSystem) {
@@ -184,88 +165,209 @@ export function createChatCommand(router: Router): Command {
         }
       }
       
-      // Update model if changed
       session.model = model;
 
-      const spinner = createSpinner({ text: `Connecting to ${model}...` });
-      
-      // Build messages with history
-      const messages = getMessagesForApi(session, prompt);
-
-      const startTime = Date.now();
-      let fullResponse = '';
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let providerUsed = '';
-      let modelUsed = '';
-
-      try {
-        spinner.start();
-        
-        const fallbackModels = options.fallback ? config.fallbackModels : [];
-        let spinnerStopped = false;
-        
-        for await (const chunk of router.chat({
-          model,
-          messages,
-          options: {
-            model,
-            temperature: options.temperature ?? config.settings.temperature,
-            maxTokens: options.maxTokens ?? config.settings.maxTokens,
-            stream: options.stream ?? config.settings.stream
-          },
-          fallbackModels
-        })) {
-          if (!spinnerStopped) {
-            spinner.stop();
-            spinnerStopped = true;
-          }
-          process.stdout.write(chalk.green(chunk));
-          fullResponse += chunk;
-        }
-        
-        console.log(); // New line after streaming
-        
-        // Save assistant response to history
-        addMessage(session, 'user', prompt);
-        addMessage(session, 'assistant', fullResponse);
-        
-        // Estimate tokens using proper estimation
-        const allText = messages.map(m => m.content).join(' ');
-        inputTokens = estimateTokens(allText);
-        outputTokens = estimateTokens(fullResponse);
-        
-        const duration = Date.now() - startTime;
-        
-        // Show stats
-        if (config.settings.showTokens || config.settings.showCost) {
-          console.log(chalk.gray('─'.repeat(50)));
-          if (config.settings.showTokens) {
-            console.log(chalk.gray(`  ${formatUsage({ input: Math.round(inputTokens), output: Math.round(outputTokens), total: Math.round(inputTokens + outputTokens) })}`));
-          }
-          console.log(chalk.gray(`  Time: ${formatDuration(duration)}`));
-          if (config.settings.showCost) {
-            const cost = estimateCost(model, Math.round(inputTokens), Math.round(outputTokens));
-            console.log(chalk.gray(`  Cost: ${formatCost(cost)}`));
-          }
-          console.log(chalk.gray(`  Session: ${session.id} (${session.messages.filter(m => m.role !== 'system').length} messages)`));
-        }
-        
-      } catch (err) {
-        spinner.fail(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
-        process.exit(1);
+      // ===== INTERACTIVE MODE (no prompt provided) =====
+      if (!prompt) {
+        await startInteractiveMode(router, session, config, options);
+        return;
       }
+
+      // ===== SINGLE MESSAGE MODE =====
+      await sendMessage(router, session, prompt, config, options);
     });
 
   return cmd;
 }
 
 /**
+ * Interactive multi-turn chat mode
+ */
+async function startInteractiveMode(
+  router: Router,
+  session: ConversationSession,
+  config: any,
+  options: any
+): Promise<void> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: chalk.cyan('You > ')
+  });
+
+  // Show welcome banner
+  console.log();
+  console.log(chalk.cyan('┌─────────────────────────────────────────┐'));
+  console.log(chalk.cyan('│') + chalk.white('  Octapus Interactive Chat                ') + chalk.cyan('│'));
+  console.log(chalk.cyan('│') + chalk.gray(`  Model: ${session.model}`.padEnd(39)) + chalk.cyan('│'));
+  console.log(chalk.cyan('│') + chalk.gray(`  Session: ${session.id}`.padEnd(39)) + chalk.cyan('│'));
+  console.log(chalk.cyan('└─────────────────────────────────────────┘'));
+  console.log();
+  console.log(chalk.gray('  Type your message and press Enter.'));
+  console.log(chalk.gray('  Commands: /quit, /history, /clear, /new, /model <name>, /help'));
+  console.log();
+  
+  const askQuestion = (): Promise<string> => {
+    return new Promise((resolve) => {
+      rl.question(chalk.cyan('You > '), (answer) => {
+        resolve(answer.trim());
+      });
+    });
+  };
+
+  let running = true;
+
+  while (running) {
+    const input = await askQuestion();
+
+    if (!input) continue;
+
+    // Handle slash commands
+    if (input.startsWith('/')) {
+      const cmd = input.split(' ')[0].toLowerCase();
+      const args = input.slice(cmd.length).trim();
+
+      switch (cmd) {
+        case '/quit':
+        case '/exit':
+        case '/q':
+          running = false;
+          console.log(chalk.gray('\nSession saved. Goodbye!'));
+          break;
+
+        case '/history':
+          console.log();
+          console.log(getHistoryText(session, 15));
+          console.log();
+          break;
+
+        case '/clear':
+          clearAllHistory();
+          session = createSession(session.model);
+          console.log(chalk.green('✓ History cleared, new session started.'));
+          break;
+
+        case '/new':
+          session = createSession(session.model);
+          console.log(chalk.green('✓ New session started.'));
+          break;
+
+        case '/model':
+          if (args) {
+            session.model = args;
+            console.log(chalk.green(`✓ Model changed to: ${args}`));
+          } else {
+            console.log(chalk.gray(`Current model: ${session.model}`));
+            console.log(chalk.gray('Usage: /model <model-name>'));
+          }
+          break;
+
+        case '/help':
+          console.log();
+          console.log(chalk.white('Commands:'));
+          console.log(chalk.gray('  /quit, /exit, /q   Exit interactive mode'));
+          console.log(chalk.gray('  /history           Show conversation history'));
+          console.log(chalk.gray('  /clear             Clear history & start new session'));
+          console.log(chalk.gray('  /new               Start new session (keep history)'));
+          console.log(chalk.gray('  /model [name]      Show or change model'));
+          console.log(chalk.gray('  /help              Show this help'));
+          console.log();
+          break;
+
+        default:
+          console.log(chalk.yellow(`Unknown command: ${cmd}. Type /help for commands.`));
+      }
+
+      if (running) rl.prompt();
+      continue;
+    }
+
+    // Send message to AI
+    await sendMessage(router, session, input, config, options);
+    rl.prompt();
+  }
+
+  rl.close();
+}
+
+/**
+ * Send a single message and stream the response
+ */
+async function sendMessage(
+  router: Router,
+  session: ConversationSession,
+  prompt: string,
+  config: any,
+  options: any
+): Promise<void> {
+  const model = session.model;
+  const spinner = createSpinner({ text: `Thinking...` });
+  
+  const messages = getMessagesForApi(session, prompt);
+
+  const startTime = Date.now();
+  let fullResponse = '';
+
+  try {
+    spinner.start();
+    
+    const fallbackModels = options.fallback ? config.fallbackModels : [];
+    let spinnerStopped = false;
+    
+    for await (const chunk of router.chat({
+      model,
+      messages,
+      options: {
+        model,
+        temperature: options.temperature ?? config.settings.temperature,
+        maxTokens: options.maxTokens ?? config.settings.maxTokens,
+        stream: options.stream ?? config.settings.stream
+      },
+      fallbackModels
+    })) {
+      if (!spinnerStopped) {
+        spinner.stop();
+        spinnerStopped = true;
+      }
+      process.stdout.write(chalk.green(chunk));
+      fullResponse += chunk;
+    }
+    
+    console.log();
+    
+    // Save to history
+    addMessage(session, 'user', prompt);
+    addMessage(session, 'assistant', fullResponse);
+    
+    const duration = Date.now() - startTime;
+    const inputTokens = estimateTokens(messages.map(m => m.content).join(' '));
+    const outputTokens = estimateTokens(fullResponse);
+    
+    // Compact stats line
+    if (config.settings.showTokens || config.settings.showCost) {
+      const stats: string[] = [];
+      if (config.settings.showTokens) {
+        stats.push(`${formatUsage({ input: Math.round(inputTokens), output: Math.round(outputTokens), total: Math.round(inputTokens + outputTokens) })}`);
+      }
+      stats.push(`Time: ${formatDuration(duration)}`);
+      if (config.settings.showCost) {
+        const cost = estimateCost(model, Math.round(inputTokens), Math.round(outputTokens));
+        stats.push(`Cost: ${formatCost(cost)}`);
+      }
+      console.log(chalk.gray(`  ${stats.join(' │ ')}`));
+      console.log();
+    }
+    
+  } catch (err) {
+    spinner.fail(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    console.log();
+  }
+}
+
+/**
  * Estimate cost based on model and token usage
  */
 function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
-  // All current providers are free or have minimal cost
-  // This is a rough estimate - actual costs vary by provider
   const rates: Record<string, { input: number; output: number }> = {
     'groq': { input: 0, output: 0 },
     'cerebras': { input: 0, output: 0 },
@@ -278,13 +380,12 @@ function estimateCost(model: string, inputTokens: number, outputTokens: number):
     'requesty': { input: 0.00015, output: 0.0006 }
   };
   
-  // Try to determine provider from model name
   let provider = 'unknown';
   if (model.includes('llama') && !model.includes('openrouter')) provider = 'groq';
   else if (model.includes('gemini')) provider = 'gemini';
   else if (model.includes('mixtral')) provider = 'groq';
   else if (model.includes('gemma')) provider = 'groq';
-  else provider = 'together'; // Default assumption
+  else provider = 'together';
   
   const rate = rates[provider] || { input: 0, output: 0 };
   return (inputTokens * rate.input + outputTokens * rate.output) / 1000;
