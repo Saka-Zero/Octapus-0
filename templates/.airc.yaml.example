@@ -1,0 +1,16 @@
+# .airc.yaml - Project-level config (optional)
+# Place this in your project root to override global ~/.config/octapus/config.yaml
+
+# Provider overrides for this project
+providers:
+  groq:
+    enabled: true
+    priority: 15  # Higher than global (10) for this project
+
+# Model overrides
+defaultModel: "llama-3.1-70b-versatile"
+
+# Settings overrides
+settings:
+  temperature: 0.3  # Lower temperature for code review project
+  maxTokens: 8192   # More tokens for detailed analysis

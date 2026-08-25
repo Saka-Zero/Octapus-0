@@ -91,7 +91,27 @@ octapus config reset --yes        # Reset to defaults
 
 ## Configuration
 
+### Global Config
+
 Config file: `~/.config/octapus/config.yaml`
+
+### Project-Level Config
+
+You can also create `.airc.yaml` in your project root to override global settings:
+
+```yaml
+# .airc.yaml - Project-level overrides
+providers:
+  groq:
+    enabled: true
+    priority: 15  # Higher than global for this project
+
+defaultModel: "llama-3.1-70b-versatile"
+
+settings:
+  temperature: 0.3  # Lower for code review
+  maxTokens: 8192   # More tokens for detailed analysis
+```
 
 ```yaml
 providers:
