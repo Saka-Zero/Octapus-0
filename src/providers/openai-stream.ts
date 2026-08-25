@@ -50,11 +50,17 @@ export async function* streamOpenAI(opts: {
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
+  // Hard timeout so a stalled connection can never hang the CLI forever
+  const timeoutSignal = AbortSignal.timeout(180_000);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutSignal])
+    : timeoutSignal;
+
   const res = await fetch(`${baseURL}/chat/completions`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal: options.signal
+    signal
   });
 
   if (!res.ok || !res.body) {
@@ -69,48 +75,57 @@ export async function* streamOpenAI(opts: {
   // Assemble streamed tool_call deltas keyed by index
   const pendingCalls = new Map<number, { id: string; name: string; args: string }>();
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
 
-      if (data === '[DONE]') {
-        yield* emitCalls(pendingCalls);
-        return;
-      }
+        if (data === '[DONE]') {
+          yield* emitCalls(pendingCalls);
+          return;
+        }
 
-      let parsed: any;
-      try {
-        parsed = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      const delta = parsed.choices?.[0]?.delta;
-      if (!delta) continue;
+        let parsed: any;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        // Some providers send errors with HTTP 200 — surface them
+        if (parsed.error) {
+          throw new Error(`${providerName} stream error: ${JSON.stringify(parsed.error).slice(0, 300)}`);
+        }
+        const delta = parsed.choices?.[0]?.delta;
+        if (!delta) continue;
 
-      if (delta.content) {
-        yield { type: 'text', text: delta.content };
-      }
-      if (Array.isArray(delta.tool_calls)) {
-        for (const tc of delta.tool_calls as DeltaToolCall[]) {
-          const slot = pendingCalls.get(tc.index) || { id: '', name: '', args: '' };
-          if (tc.id) slot.id = tc.id;
-          if (tc.function?.name) slot.name += tc.function.name;
-          if (tc.function?.arguments) slot.args += tc.function.arguments;
-          pendingCalls.set(tc.index, slot);
+        if (delta.content) {
+          yield { type: 'text', text: delta.content };
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls as DeltaToolCall[]) {
+            const slot = pendingCalls.get(tc.index) || { id: '', name: '', args: '' };
+            if (tc.id) slot.id = tc.id;
+            if (tc.function?.name) slot.name += tc.function.name;
+            if (tc.function?.arguments) slot.args += tc.function.arguments;
+            pendingCalls.set(tc.index, slot);
+          }
         }
       }
     }
+    // Stream ended without [DONE] — still flush any assembled calls
+    yield* emitCalls(pendingCalls);
+  } finally {
+    // Release the socket when the consumer breaks early (Esc abort etc.)
+    reader.cancel().catch(() => {});
   }
-  // Stream ended without [DONE] — still flush any assembled calls
-  yield* emitCalls(pendingCalls);
 }
 
 /** Emit fully-assembled tool calls as a single final event */

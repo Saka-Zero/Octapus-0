@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { Tool } from './providers';
+import { researchQuery, webFetch } from './web';
 
 export interface ToolResult {
   ok: boolean;
@@ -59,8 +60,46 @@ const DANGEROUS = [
   /\bdel\s+\/[sf]\s/i,
   /:\(\)\{.*\};:/, // fork bomb
   /\bmkfs\b/i,
-  /\bdd\s+if=\/dev\/zero\s+of=\/dev\//i
+  /\bdd\s+if=\/dev\/zero\s+of=\/dev\//i,
+  /Remove-Item\s+.*-Recurs/i,
+  /rmdir\s+\/s/i,
+  /reg\s+delete/i,
+  /vssadmin/i,
+  /\bcurl\b[^|]*\|\s*(ba)?sh/i,
+  /Invoke-Expression/i
 ];
+
+// ─── Sandbox: protect sensitive files from agent reads/writes ──────
+const SENSITIVE_PATTERNS = [
+  /[\\/]\.ssh([\\/]|$)/i,
+  /[\\/]\.aws([\\/]|$)/i,
+  /[\\/]\.config[\\/]octapus([\\/]|$)/i,
+  /[\\/]\.gnupg([\\/]|$)/i,
+  /\.pem$/i,
+  /\.key$/i,
+  /id_rsa|id_ed25519|id_ecdsa/i,
+  /\.env($|\.[^.]+$)/i,
+  /credentials?\.json$/i
+];
+
+function isSensitivePath(resolved: string): boolean {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (home && resolved.startsWith(path.resolve(home))) {
+    // Outside cwd & inside home → require scrutiny below
+  }
+  return SENSITIVE_PATTERNS.some((rx) => rx.test(resolved));
+}
+
+/** Scrub API-key-looking strings from tool output before it reaches any LLM */
+function scrubSecrets(s: string): string {
+  return s
+    .replace(/\bsk-[A-Za-z0-9]{20,}\b/g, 'sk-[REDACTED]')
+    .replace(/\bgsk_[A-Za-z0-9]{20,}\b/g, 'gsk-[REDACTED]')
+    .replace(/\bghp_[A-Za-z0-9]{20,}\b/g, 'ghp-[REDACTED]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, 'github_pat_[REDACTED]')
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA[REDACTED]')
+    .replace(/\bAQ\.[A-Za-z0-9_-]{20,}\b/g, 'AQ.[REDACTED]');
+}
 
 export const AGENT_TOOLS: Tool[] = [
   {
@@ -134,6 +173,35 @@ export const AGENT_TOOLS: Tool[] = [
         required: ['pattern']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the live internet (DuckDuckGo, keyless). Use for current events, latest CVEs, recent releases, documentation lookups — anything past your knowledge cutoff.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          deep: { type: 'boolean', description: 'If true, also fetch the top result page for full context' }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch a public http(s) URL and return its readable text content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to fetch' }
+        },
+        required: ['url']
+      }
+    }
   }
 ];
 
@@ -166,6 +234,16 @@ export async function executeTool(
       return doRunCommand(String(args.command || ''), cwd, approve);
     case 'search_files':
       return doSearchFiles(String(args.pattern || ''), String(args.path || '.'), args.glob ? String(args.glob) : undefined);
+    case 'web_search':
+      return researchQuery(String(args.query || ''), Boolean(args.deep)).then(
+        (output) => ({ ok: true, output: cap(scrubSecrets(output)) }),
+        (e) => ({ ok: false, output: `web_search failed: ${e instanceof Error ? e.message : e}` })
+      );
+    case 'web_fetch':
+      return webFetch(String(args.url || '')).then(
+        (output) => ({ ok: true, output: cap(scrubSecrets(output)) }),
+        (e) => ({ ok: false, output: `web_fetch failed: ${e instanceof Error ? e.message : e}` })
+      );
     default:
       return { ok: false, output: `Unknown tool: ${name}` };
   }
@@ -178,10 +256,13 @@ function cap(s: string): string {
 async function doReadFile(p: string): Promise<ToolResult> {
   try {
     const resolved = path.resolve(p);
+    if (isSensitivePath(resolved)) {
+      return { ok: false, output: `BLOCKED: "${resolved}" matches a protected path (SSH keys, credentials, provider configs). Reading it would send its contents to external AI providers.` };
+    }
     const stat = fs.statSync(resolved);
     if (stat.size > 1024 * 1024) return { ok: false, output: 'File too large (>1MB)' };
     const content = fs.readFileSync(resolved, 'utf8');
-    return { ok: true, output: cap(content) };
+    return { ok: true, output: cap(scrubSecrets(content)) };
   } catch (e) {
     return { ok: false, output: `read_file failed: ${e instanceof Error ? e.message : e}` };
   }
@@ -214,6 +295,9 @@ async function doWriteFile(p: string, content: string, approve?: ToolApproval): 
   try {
     if (content.length > MAX_FILE_WRITE) return { ok: false, output: 'Content too large (>512KB)' };
     const resolved = path.resolve(p);
+    if (isSensitivePath(resolved)) {
+      return { ok: false, output: `BLOCKED: "${resolved}" is a protected path (SSH keys, credentials, provider configs). The agent may not write there.` };
+    }
     const existed = fs.existsSync(resolved);
     const oldContent = existed ? fs.readFileSync(resolved, 'utf8') : '';
 
@@ -267,7 +351,7 @@ async function doRunCommand(command: string, cwd: string, approve?: ToolApproval
         if (err && !out) {
           resolve({ ok: false, output: cap(`Command failed: ${err.message}`) });
         } else {
-          resolve({ ok: !err, output: cap(out || '(no output)') });
+          resolve({ ok: !err, output: cap(scrubSecrets(out || '(no output)')) });
         }
       }
     );
@@ -319,6 +403,6 @@ async function doSearchFiles(pattern: string, dir: string, ext?: string): Promis
 
   walk(path.resolve(dir), 0);
   return results.length
-    ? { ok: true, output: cap(results.join('\n')) }
+    ? { ok: true, output: cap(scrubSecrets(results.join('\n'))) }
     : { ok: true, output: 'No matches found.' };
 }

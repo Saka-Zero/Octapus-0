@@ -40,9 +40,9 @@ export async function runCouncil(
   history: Message[],
   config: any,
   options: any,
-  cb: CouncilCallbacks,
-  signal?: AbortSignal
+  cb: CouncilCallbacks
 ): Promise<CouncilResult> {
+  const signal: AbortSignal | undefined = options?.signal;
   const domain = classifyIntent(prompt);
   const matched = matchSkills(prompt);
   const skillText = formatSkillsForPrompt(matched);

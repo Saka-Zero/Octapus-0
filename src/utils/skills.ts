@@ -86,11 +86,32 @@ function ensureUserSkillsDir(): void {
   }
 }
 
+// Cache keyed by directory mtimes — avoids re-reading every SKILL.md on
+// every prompt (hot path). Edits to skills still picked up via mtime change.
+let cacheKey = '';
+let cachedSkills: Skill[] | null = null;
+
+function dirSignature(): string {
+  const sigs: string[] = [];
+  for (const dir of [USER_SKILLS_DIR, BUNDLED_SKILLS_DIR]) {
+    try {
+      if (!fs.existsSync(dir)) { sigs.push('none'); continue; }
+      const stat = fs.statSync(dir);
+      sigs.push(`${dir}:${stat.mtimeMs}`);
+    } catch { sigs.push(`${dir}:err`); }
+  }
+  return sigs.join('|');
+}
+
 /**
  * List all available skills. User-dir skills override bundled ones with the same name.
+ * Cached per directory mtime — hot-reloads when skill files/dirs change.
  */
 export function listSkills(): Skill[] {
   ensureUserSkillsDir();
+  const key = dirSignature();
+  if (cachedSkills && key === cacheKey) return cachedSkills;
+
   const byName = new Map<string, Skill>();
 
   for (const [dir, source] of [[BUNDLED_SKILLS_DIR, 'bundled'] as const, [USER_SKILLS_DIR, 'user'] as const]) {
@@ -107,7 +128,9 @@ export function listSkills(): Skill[] {
     }
   }
 
-  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+  cachedSkills = Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+  cacheKey = key;
+  return cachedSkills;
 }
 
 /**
