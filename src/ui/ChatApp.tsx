@@ -13,6 +13,7 @@ import { SessionPicker } from './SessionPicker';
 import { runAgentTurn } from '../agent';
 import { getTheme, listThemeNames } from './theme';
 import { execSync } from 'child_process';
+import { classifyIntent, domainLabel, DOMAIN_PERSONAS, Domain } from '../utils/roles';
 
 interface ChatAppProps {
   router: Router;
@@ -60,7 +61,7 @@ function ApprovalPrompt({ tool, summary, onDecision }: { tool: string; summary: 
   );
 }
 
-function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string): string {
+function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string, persona?: string): string {
   const parts: string[] = [];
   parts.push(userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
   if (config.settings.useMemory !== false) {
@@ -71,6 +72,7 @@ function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: s
     }
   }
   if (activeSkillText) parts.push(activeSkillText);
+  if (persona) parts.push(persona);
   return parts.join('\n\n');
 }
 
@@ -170,8 +172,12 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     if (matched.length > 0) pushNote(`⚡ Skills: ${matched.map((s) => s.name).join(', ')}`);
     const skillText = formatSkillsForPrompt(matched);
 
+    // Classify intent → route to the right specialist
+    const domain: Domain = classifyIntent(prompt);
+    pushNote(`🎯 ${domainLabel(domain)}`);
+
     const messages = getMessagesForApi(sessionRef.current);
-    const sysContent = buildSystemPrompt(config, options.system, skillText);
+    const sysContent = buildSystemPrompt(config, options.system, skillText, DOMAIN_PERSONAS[domain]);
     if (sysContent) {
       const idx = messages.findIndex((m) => m.role === 'system');
       if (idx >= 0) messages[idx] = { role: 'system', content: sysContent };
@@ -202,7 +208,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       });
 
       if (agentMode) {
-        const result = await runAgentTurn(router, messages, model, config, { ...options, signal: controller.signal }, {
+        const result = await runAgentTurn(router, messages, model, config, { ...options, signal: controller.signal, domain }, {
           onText: (chunk) => {
             if (!flushTimer) { setThinking(false); startFlusher(); }
             streamText += chunk;
@@ -228,7 +234,8 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           model,
           messages,
           options: makeOpts(),
-          fallbackModels: options.fallback ? config.fallbackModels : []
+          fallbackModels: options.fallback ? config.fallbackModels : [],
+          domain
         })) {
           if (ev.type === 'text') {
             if (!flushTimer) { setThinking(false); startFlusher(); }

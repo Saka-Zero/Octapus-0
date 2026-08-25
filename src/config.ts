@@ -46,25 +46,27 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yaml');
 
 const DEFAULT_CONFIG: Config = {
   providers: {
-    groq: { apiKey: '', priority: 10, enabled: false },
-    cerebras: { apiKey: '', priority: 9, enabled: false },
-    gemini: { apiKey: '', priority: 8, enabled: false },
-    sambanova: { apiKey: '', priority: 7, enabled: false },
-    ollama: { baseURL: 'http://localhost:11434', priority: 7, enabled: false },
-    'github-models': { apiKey: '', priority: 6, enabled: false },
-    mistral: { apiKey: '', priority: 6, enabled: false },
-    nvidia: { apiKey: '', priority: 5, enabled: false },
-    cohere: { apiKey: '', priority: 5, enabled: false },
-    huggingface: { apiKey: '', priority: 4, enabled: false },
-    together: { apiKey: '', priority: 4, enabled: false },
-    openrouter: { apiKey: '', priority: 3, enabled: false },
-    zhipu: { apiKey: '', priority: 3, enabled: false },
-    novita: { apiKey: '', priority: 2, enabled: false },
-    requesty: { apiKey: '', priority: 2, enabled: false },
-    siliconflow: { apiKey: '', priority: 2, enabled: false },
-    modelscope: { apiKey: '', priority: 2, enabled: false },
+    // Squad roles: each active provider has a specialty.
+    // coding → coder role jumps the queue; security → strongest model + persona.
+    groq: { apiKey: '', priority: 10, enabled: false, role: 'fast' },
+    cerebras: { apiKey: '', priority: 9, enabled: false, role: 'fast' },
+    gemini: { apiKey: '', priority: 8, enabled: false, role: 'general' },
+    sambanova: { apiKey: '', priority: 7, enabled: false, role: 'general' },
+    ollama: { baseURL: 'http://localhost:11434', priority: 7, enabled: false, role: 'fast' },
+    'github-models': { apiKey: '', priority: 6, enabled: false, role: 'coder' },
+    mistral: { apiKey: '', priority: 6, enabled: false, role: 'coder' },
+    nvidia: { apiKey: '', priority: 5, enabled: false, role: 'security' },
+    cohere: { apiKey: '', priority: 5, enabled: false, role: 'general' },
+    huggingface: { apiKey: '', priority: 4, enabled: false, role: 'general' },
+    together: { apiKey: '', priority: 4, enabled: false, role: 'general' },
+    openrouter: { apiKey: '', priority: 3, enabled: false, role: 'general' },
+    zhipu: { apiKey: '', priority: 3, enabled: false, role: 'general' },
+    novita: { apiKey: '', priority: 2, enabled: false, role: 'general' },
+    requesty: { apiKey: '', priority: 2, enabled: false, role: 'general' },
+    siliconflow: { apiKey: '', priority: 2, enabled: false, role: 'coder' },
+    modelscope: { apiKey: '', priority: 2, enabled: false, role: 'coder' },
     // Local — no key needed (LM Studio local server)
-    lmstudio: { baseURL: 'http://localhost:1234/v1', apiKey: '', priority: 7, enabled: false },
+    lmstudio: { baseURL: 'http://localhost:1234/v1', apiKey: '', priority: 7, enabled: false, role: 'fast' },
     // Free-tier cloud providers
     // Cloudflare Workers AI: 10k neurons/day free. Replace {ACCOUNT_ID} with your account ID!
     cloudflare: { baseURL: 'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1', apiKey: '', priority: 2, enabled: false },
@@ -79,11 +81,11 @@ const DEFAULT_CONFIG: Config = {
     // Works with NO API key — zero-setup free provider
     pollinations: { baseURL: 'https://text.pollinations.ai/openai', apiKey: '', priority: 1, enabled: true },
     // OpenCode Zen free models — auto-imports key from `opencode auth login`
-    'opencode-zen': { baseURL: 'https://opencode.ai/zen/v1', apiKey: '', priority: 6, enabled: true },
+    'opencode-zen': { baseURL: 'https://opencode.ai/zen/v1', apiKey: '', priority: 6, enabled: true, role: 'coder' },
     // LLM7 anonymous tier — "unused" token works, no registration
-    llm7: { baseURL: 'https://api.llm7.io/v1', apiKey: 'unused', priority: 5, enabled: true },
+    llm7: { baseURL: 'https://api.llm7.io/v1', apiKey: 'unused', priority: 5, enabled: true, role: 'fast' },
     // BlockRun free NVIDIA tier — zero auth
-    blockrun: { baseURL: 'https://blockrun.ai/api/v1', apiKey: '', priority: 2, enabled: true }
+    blockrun: { baseURL: 'https://blockrun.ai/api/v1', apiKey: '', priority: 2, enabled: true, role: 'fast' }
   },
   defaultModel: 'llama-3.3-70b-versatile',
   fallbackModels: [

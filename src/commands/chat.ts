@@ -12,6 +12,7 @@ import {
   rememberFact
 } from '../utils/memory';
 import { matchSkills, formatSkillsForPrompt } from '../utils/skills';
+import { classifyIntent, domainLabel, DOMAIN_PERSONAS } from '../utils/roles';
 import { Message } from '../providers';
 import {
   loadSession,
@@ -217,9 +218,9 @@ export function createChatCommand(router: Router): Command {
 }
 
 /**
- * Compose the final system prompt: user prompt (or genius default) + long-term memory + active skills
+ * Compose the final system prompt: user prompt (or genius default) + long-term memory + active skills + role persona
  */
-function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string): string {
+function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string, persona?: string): string {
   const parts: string[] = [];
 
   const base = userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT;
@@ -232,6 +233,10 @@ function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: s
 
   if (activeSkillText) {
     parts.push(activeSkillText);
+  }
+
+  if (persona) {
+    parts.push(persona);
   }
 
   return parts.join('\n\n');
@@ -421,9 +426,13 @@ async function sendMessage(
   if (matched.length > 0) {
     console.log(chalk.gray(`  ⚡ Skills: ${matched.map(s => s.name).join(', ')}`));
   }
-  
-  // Inject composed system prompt (genius default / user override + long-term memory + skills)
-  const sysContent = buildSystemPrompt(config, options.system, formatSkillsForPrompt(matched));
+
+  // Classify intent → route to specialist
+  const domain = classifyIntent(prompt);
+  console.log(chalk.gray(`  🎯 ${domainLabel(domain)}`));
+
+  // Inject composed system prompt (genius default / user override + long-term memory + skills + persona)
+  const sysContent = buildSystemPrompt(config, options.system, formatSkillsForPrompt(matched), DOMAIN_PERSONAS[domain]);
   if (sysContent) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
@@ -451,7 +460,8 @@ async function sendMessage(
         stream: true,
         disableFallback: options.fallback === false
       },
-      fallbackModels: options.fallback ? config.fallbackModels : []
+      fallbackModels: options.fallback ? config.fallbackModels : [],
+      domain
     })) {
       if (!spinnerStopped) {
         spinner.stop();

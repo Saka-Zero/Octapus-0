@@ -54,7 +54,8 @@ export async function runAgentTurn(
         quiet: true,
         signal: options.signal
       },
-      fallbackModels: options.fallback ? config.fallbackModels : []
+      fallbackModels: options.fallback ? config.fallbackModels : [],
+      domain: options.domain
     })) {
       if (ev.type === 'text') {
         turnText += ev.text;

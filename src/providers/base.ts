@@ -59,6 +59,8 @@ export interface ProviderConfig {
   priority?: number;
   enabled?: boolean;
   models?: string[];
+  /** Specialty for role-based routing: general | coder | security | fast */
+  role?: 'general' | 'coder' | 'security' | 'fast';
 }
 
 export interface RouterOptions {
@@ -66,4 +68,6 @@ export interface RouterOptions {
   messages: Message[];
   options: ChatOptions;
   fallbackModels?: string[];
+  /** Intent domain for role-based routing: coding | security | general */
+  domain?: string;
 }

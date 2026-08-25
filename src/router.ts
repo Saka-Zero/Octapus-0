@@ -44,7 +44,7 @@ export class Router {
     return undefined;
   }
 
-  getFallbackChain(model: string, fallbackModels?: string[], disableFallback = false): Array<{ provider: Provider; modelToUse: string }> {
+  getFallbackChain(model: string, fallbackModels?: string[], disableFallback = false, domain?: string): Array<{ provider: Provider; modelToUse: string }> {
     const chain: Array<{ provider: Provider; modelToUse: string }> = [];
     const primary = this.getProviderForModel(model);
     if (primary) {
@@ -68,14 +68,28 @@ export class Router {
       }
     }
 
-    // Add any other enabled providers sorted by priority (highest first)
+    // Remaining enabled providers: role-matched first (domain routing), then priority
+    const roleMatches = (p: Provider): number => {
+      if (!domain) return 0;
+      const role = this.config.providers[p.name]?.role;
+      if (!role) return 0;
+      if (domain === 'coding' && role === 'coder') return 1;
+      if (domain === 'security' && role === 'security') return 1;
+      if (domain === 'general' && role === 'general') return 1;
+      return 0;
+    };
+
     const remaining = Array.from(this.providers.values())
       .filter(provider => !chain.some(c => c.provider === provider))
       .filter(provider => {
         const cfg = this.config.providers[provider.name];
         return cfg?.enabled && provider.models.length > 0;
       })
-      .sort((a, b) => b.priority - a.priority);
+      .sort((a, b) => {
+        const ra = roleMatches(a), rb = roleMatches(b);
+        if (ra !== rb) return rb - ra;           // specialists first
+        return b.priority - a.priority;          // then priority
+      });
 
     for (const provider of remaining) {
       chain.push({ provider, modelToUse: provider.models[0] });
@@ -85,9 +99,9 @@ export class Router {
   }
 
   async *chat(options: RouterOptions): AsyncIterable<StreamEvent> {
-    const { model, messages, options: chatOptions, fallbackModels } = options;
+    const { model, messages, options: chatOptions, fallbackModels, domain } = options;
     const quiet = chatOptions?.quiet ?? false;
-    const chain = this.getFallbackChain(model, fallbackModels, chatOptions?.disableFallback ?? false);
+    const chain = this.getFallbackChain(model, fallbackModels, chatOptions?.disableFallback ?? false, domain);
 
     if (chain.length === 0) {
       throw new Error(`No provider available for model: ${model}`);
