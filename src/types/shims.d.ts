@@ -1,6 +1,5 @@
 // Type shims for packages whose types aren't resolvable under
-// moduleResolution:"node" (ink v5 uses package.json "exports" map),
-// or that ship without bundled declarations.
+// moduleResolution:"node" (ink v3 ships types via exports map quirks).
 
 declare module 'ink' {
   import { ComponentType, ReactElement } from 'react';
@@ -39,5 +38,3 @@ declare module 'ink' {
     options?: { isActive?: boolean }
   ): void;
 }
-
-declare module 'marked-terminal';

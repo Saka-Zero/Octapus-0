@@ -498,12 +498,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
             )}
             {item.kind === 'assistant' && (
               <Box flexDirection="column" paddingLeft={1}>
-                {renderMarkdown(item.text).split('\n').map((line, li) => (
-                  <Text key={li}>
-                    <Text color={theme.borderActive}>{'│ '}</Text>
-                    <Text color={theme.text}>{line.length ? line : ' '}</Text>
-                  </Text>
-                ))}
+                <Text>{renderMarkdown(item.text, { accent: theme.primary, muted: theme.borderActive })}</Text>
               </Box>
             )}
             {item.kind === 'note' && (
@@ -557,12 +552,9 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       {(thinking || streaming !== null) && (
         <Box flexDirection="column" marginTop={1} paddingLeft={1}>
           {thinking && <Spinner label="thinking… (esc interrupts)" color={theme.accent} />}
-          {streaming !== null && renderMarkdown(streaming).split('\n').map((line, li) => (
-            <Text key={li}>
-              <Text color={theme.borderActive}>{'│ '}</Text>
-              <Text color={theme.text}>{line.length ? line : ' '}</Text>
-            </Text>
-          ))}
+          {streaming !== null && (
+            <Text>{renderMarkdown(streaming, { accent: theme.primary, muted: theme.borderActive })}</Text>
+          )}
         </Box>
       )}
 
