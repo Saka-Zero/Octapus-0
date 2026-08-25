@@ -1,0 +1,59 @@
+# Octapus-0 Configuration Template
+# Copy to ~/.config/octapus/config.yaml and fill in your API keys
+
+providers:
+  # Groq - Free tier, very fast (LPU inference)
+  # Get key: https://console.groq.com/keys
+  groq:
+    apiKey: ""           # gsk_xxxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 10         # Highest priority (tried first)
+    enabled: false       # Set true after adding apiKey
+
+  # Google Gemini - Free tier, 1.5M tokens/min
+  # Get key: https://aistudio.google.com/apikey
+  gemini:
+    apiKey: ""           # AIzaSyxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 8
+    enabled: false
+
+  # Ollama - Local models, unlimited, private
+  # Run: ollama serve (default: http://localhost:11434)
+  ollama:
+    baseURL: "http://localhost:11434"
+    priority: 5
+    enabled: true        # Enabled by default (no key needed)
+
+  # OpenRouter - Access 100+ models, $1 free credit
+  # Get key: https://openrouter.ai/keys
+  openrouter:
+    apiKey: ""           # sk-or-v1-xxxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 3
+    enabled: false
+
+  # Requesty - Aggregator, free tier available
+  # Get key: https://requesty.ai/keys
+  requesty:
+    apiKey: ""           # sk-xxxxxxxxxxxxxxxx
+    baseURL: ""          # Optional: custom endpoint
+    priority: 2
+    enabled: false
+
+# Default model to use when none specified
+defaultModel: "llama-3.1-70b-versatile"
+
+# Fallback models (tried in order if primary fails)
+fallbackModels:
+  - "gemini-1.5-flash-latest"
+  - "llama-3.1-8b-instant"
+  - "mixtral-8x7b-32768"
+
+# Global settings
+settings:
+  temperature: 0.7       # 0.0 - 2.0
+  maxTokens: 4096        # Max output tokens
+  stream: true           # Stream tokens in real-time
+  showCost: true         # Show cost estimate after response
+  showTokens: true       # Show token usage after response
