@@ -119,19 +119,28 @@ const EXTRACTION_RULES: ExtractionRule[] = [
     },
     value: (m) => m[1].trim()
   },
-  // Preference: "I prefer X", "I like using X"
+  // Preference: "I prefer X", "I like using X" — stable slug key so similar
+  // preferences overwrite instead of piling up duplicates
   {
     pattern: /\bI\s+(?:prefer|like\s+using|always\s+use)\s+(.{3,150})/i,
-    key: () => `preference.${Date.now().toString(36)}`,
+    key: (m) => `preference.${slugify(m[1])}`,
     value: (m) => m[1].trim()
   },
   // Project context: "I'm working on X", "my project is X"
   {
     pattern: /\b(?:I'?m working on|my project is)\s+(.{3,150})/i,
-    key: () => `project.${Date.now().toString(36)}`,
+    key: () => 'project.current',
     value: (m) => m[1].trim()
   }
 ];
+
+/**
+ * Stable slug from free text (first few meaningful words).
+ */
+function slugify(text: string): string {
+  const words = text.trim().split(/\s+/).slice(0, 4).join('-').toLowerCase().replace(/[^a-z0-9-]/g, '');
+  return words || 'misc';
+}
 
 /**
  * Extract facts from a user message and store them.

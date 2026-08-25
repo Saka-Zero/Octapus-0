@@ -24,6 +24,8 @@ export interface ChatOptions {
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   /** Router-level flag: when true, only the primary provider is tried (no fallback) */
   disableFallback?: boolean;
+  /** Router-level flag: suppress console notifications (used by TUI mode) */
+  quiet?: boolean;
 }
 
 export interface Tool {

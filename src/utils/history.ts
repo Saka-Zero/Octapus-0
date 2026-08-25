@@ -15,6 +15,9 @@ export interface ConversationSession {
   model: string;
   messages: Message[];
   title: string;
+  /** Rolling AI-generated summary of turns that fell out of the context window.
+   *  Full messages are ALWAYS kept on disk — this only compresses what gets sent to the API. */
+  digest?: string;
 }
 
 /**
@@ -135,7 +138,30 @@ export function addMessage(session: ConversationSession, role: 'user' | 'assista
 }
 
 /**
- * Get messages for API call (with context window management)
+ * Split conversation history into (kept, overflow) given the context budget.
+ * Kept = most recent messages that fit; overflow = older turns outside the window.
+ */
+function splitByBudget(historyMessages: Message[]): { kept: Message[]; overflow: Message[] } {
+  const recentMessages = historyMessages.slice(-MAX_HISTORY_MESSAGES);
+
+  const kept: Message[] = [];
+  let used = 0;
+  for (let i = recentMessages.length - 1; i >= 0; i--) {
+    const len = recentMessages[i].content.length;
+    if (used + len > CONTEXT_CHAR_BUDGET && kept.length > 0) break;
+    kept.unshift(recentMessages[i]);
+    used += len;
+  }
+
+  const keptSet = new Set(kept);
+  const overflow = historyMessages.filter((m) => !keptSet.has(m));
+  return { kept, overflow };
+}
+
+/**
+ * Get messages for API call (with context window management).
+ * When old turns fall out of the window, the session's rolling digest is
+ * injected so earlier context is never fully lost.
  */
 export function getMessagesForApi(session: ConversationSession, newPrompt?: string): Message[] {
   const messages: Message[] = [];
@@ -146,23 +172,18 @@ export function getMessagesForApi(session: ConversationSession, newPrompt?: stri
     messages.push(systemMsg);
   }
   
-  // Add conversation history (excluding system message)
+  // Inject rolling digest for turns that fell out of the context window
   const historyMessages = session.messages.filter(m => m.role !== 'system');
-  
-  // Hard cap on message count first
-  const recentMessages = historyMessages.slice(-MAX_HISTORY_MESSAGES);
-  
-  // Then fit within character budget — keep the most recent messages that fit,
-  // walking backwards so the newest context is always preserved
-  const kept: Message[] = [];
-  let used = 0;
-  for (let i = recentMessages.length - 1; i >= 0; i--) {
-    const len = recentMessages[i].content.length;
-    if (used + len > CONTEXT_CHAR_BUDGET && kept.length > 0) break;
-    kept.unshift(recentMessages[i]);
-    used += len;
+  const { overflow } = splitByBudget(historyMessages);
+  if (overflow.length > 0 && session.digest) {
+    messages.push({
+      role: 'system',
+      content: `[Conversation digest — summary of ${overflow.length} earlier turns. Full transcript is preserved in the session file.]\n${session.digest}`
+    });
   }
   
+  // Recent messages that fit within budget
+  const { kept } = splitByBudget(historyMessages);
   for (const msg of kept) {
     messages.push(msg);
   }
@@ -173,6 +194,14 @@ export function getMessagesForApi(session: ConversationSession, newPrompt?: stri
   }
   
   return messages;
+}
+
+/**
+ * Get the turns that fell out of the API context window (candidates for digest update).
+ */
+export function getOverflowMessages(session: ConversationSession): Message[] {
+  const historyMessages = session.messages.filter(m => m.role !== 'system');
+  return splitByBudget(historyMessages).overflow;
 }
 
 /**

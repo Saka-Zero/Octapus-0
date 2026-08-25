@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Box, Text, Static, useApp, useInput } from 'ink';
 import { Router } from '../router';
-import { ConversationSession, saveSession, createSession, addMessage, getMessagesForApi, getHistoryText, clearAllHistory } from '../utils/history';
+import { ConversationSession, saveSession, createSession, addMessage, getMessagesForApi, getHistoryText, clearAllHistory, getOverflowMessages } from '../utils/history';
 import { learnFromMessage, getAllFacts, rememberFact, forgetFact } from '../utils/memory';
 import { estimateTokens, calculateCost, formatCost } from '../utils';
+import { matchSkills, formatSkillsForPrompt, listSkills } from '../utils/skills';
 import { DEFAULT_SYSTEM_PROMPT } from '../config';
 import { renderMarkdown } from './markdown';
 import { TextInput } from './TextInput';
@@ -37,7 +38,7 @@ function Spinner({ label }: { label: string }) {
   );
 }
 
-function buildSystemPrompt(config: any, userSystem?: string): string {
+function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string): string {
   const parts: string[] = [];
   parts.push(userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
   if (config.settings.useMemory !== false) {
@@ -47,7 +48,54 @@ function buildSystemPrompt(config: any, userSystem?: string): string {
       parts.push(`[Long-term memory about the user — always apply this context]\n${lines.join('\n')}`);
     }
   }
+  if (activeSkillText) {
+    parts.push(activeSkillText);
+  }
   return parts.join('\n\n');
+}
+
+/**
+ * Rolling digest: fold turns that fell out of the context window into a
+ * persistent AI-generated summary. Fire-and-forget; never blocks the user.
+ */
+async function updateDigest(router: Router, session: ConversationSession, config: any): Promise<void> {
+  try {
+    const overflow = getOverflowMessages(session);
+    // Only bother when there's meaningful overflow to compress
+    const overflowChars = overflow.reduce((a, m) => a + m.content.length, 0);
+    if (overflow.length < 4 || overflowChars < 6000) return;
+
+    const transcript = overflow
+      .map((m) => `${m.role}: ${m.content.slice(0, 1500)}`)
+      .join('\n')
+      .slice(0, 24000);
+
+    const prompt =
+      `You maintain a rolling digest of a long conversation so no earlier context is ever lost.\n` +
+      `Merge the NEW TURNS below into the EXISTING DIGEST, producing one updated digest.\n` +
+      `Preserve: user facts & preferences, decisions made, names/paths/commands used, ` +
+      `technical details, open questions and unfinished threads. Be dense — drop pleasantries.\n\n` +
+      `EXISTING DIGEST:\n${session.digest || '(none yet)'}\n\n` +
+      `NEW TURNS TO FOLD IN:\n${transcript}\n\n` +
+      `Output ONLY the updated digest text.`;
+
+    let summary = '';
+    for await (const chunk of router.chat({
+      model: session.model,
+      messages: [{ role: 'user', content: prompt }],
+      options: { model: session.model, maxTokens: 1500, temperature: 0.2, quiet: true },
+      fallbackModels: config.fallbackModels || []
+    })) {
+      summary += chunk;
+    }
+    const trimmed = summary.trim();
+    if (trimmed.length > 50) {
+      session.digest = trimmed;
+      saveSession(session);
+    }
+  } catch {
+    // Digest update is best-effort; never surface errors to the user
+  }
 }
 
 export function ChatApp({ router, session: initialSession, config, options }: ChatAppProps) {
@@ -90,8 +138,15 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       refreshMemoryCount();
     }
 
+    // Auto-match skills for this prompt
+    const matched = matchSkills(prompt);
+    if (matched.length > 0) {
+      pushNote(`⚡ Skills: ${matched.map((s) => s.name).join(', ')}`);
+    }
+    const skillText = formatSkillsForPrompt(matched);
+
     const messages = getMessagesForApi(sessionRef.current);
-    const sysContent = buildSystemPrompt(config, options.system);
+    const sysContent = buildSystemPrompt(config, options.system, skillText);
     if (sysContent) {
       const idx = messages.findIndex((m) => m.role === 'system');
       if (idx >= 0) messages[idx] = { role: 'system', content: sysContent };
@@ -100,7 +155,16 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
 
     const model = sessionRef.current.model;
     const startTime = Date.now();
-    let full = '';
+    let streamText = '';
+
+    // Throttled streaming: accumulate locally, flush to state every 120ms
+    let flushTimer: ReturnType<typeof setInterval> | null = null;
+    const startFlusher = () => {
+      flushTimer = setInterval(() => setStreaming(streamText), 120);
+    };
+    const stopFlusher = () => {
+      if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
+    };
 
     setThinking(true);
     try {
@@ -112,14 +176,21 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           temperature: options.temperature ?? config.settings.temperature,
           maxTokens: options.maxTokens ?? config.settings.maxTokens,
           stream: options.stream ?? config.settings.stream,
-          disableFallback: options.fallback === false
+          disableFallback: options.fallback === false,
+          quiet: true
         },
         fallbackModels: options.fallback ? config.fallbackModels : []
       })) {
-        setThinking(false);
-        full += chunk;
-        setStreaming(full);
+        if (!flushTimer) {
+          setThinking(false);
+          startFlusher();
+        }
+        streamText += chunk;
       }
+
+      stopFlusher();
+      const full = streamText;
+      setStreaming(null);
 
       addMessage(sessionRef.current, 'assistant', full);
       setDisplay((d) => [...d, { kind: 'assistant', text: full }]);
@@ -131,7 +202,12 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       const cost = calculateCost(router.lastProvider || 'unknown', router.lastModel || model, usage);
       lastProviderRef.current = router.lastProvider || '';
       setTotals((t) => ({ tokensIn: t.tokensIn + usage.input, tokensOut: t.tokensOut + usage.output, cost: t.cost + cost }));
+
+      // Rolling digest update — fire and forget, keeps memory bulletproof
+      void updateDigest(router, sessionRef.current, config);
     } catch (err) {
+      stopFlusher();
+      setStreaming(null);
       const msg = err instanceof Error ? err.message : String(err);
       setDisplay((d) => [...d, { kind: 'error', text: `✗ ${msg}` }]);
       pushNote('(Your message was saved. Try again or switch model via /model)');
@@ -164,11 +240,22 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/model [name]      Show or change model',
           '/memory            Show long-term memory facts',
           '/remember <k> <v>  Store a fact permanently',
-          '/forget <key>      Delete a memory fact'
+          '/forget <key>      Delete a memory fact',
+          '/skills            List available skills (auto-activate on match)',
+          '/learn <lesson>    Teach me a lesson — stored permanently',
+          '/digest            Show the rolling conversation digest'
         ].join('\n');
         pushNote(help);
         return true;
       }
+
+      case '/digest':
+        pushNote(
+          sessionRef.current.digest
+            ? `Rolling digest (${sessionRef.current.digest.length} chars):\n${sessionRef.current.digest}`
+            : 'No digest yet — it builds automatically when history exceeds the context window.'
+        );
+        return true;
 
       case '/history':
         pushNote(getHistoryText(sessionRef.current, 15));
@@ -237,6 +324,29 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         } else {
           const lines = facts.map((f) => `${f.key}${f.source === 'auto' ? ' [auto]' : ' [manual]'}: ${f.value}`);
           pushNote(`Long-term memory (${facts.length} facts):\n${lines.join('\n')}`);
+        }
+        return true;
+      }
+
+      case '/skills': {
+        const all = listSkills();
+        if (all.length === 0) {
+          pushNote('No skills found. Add SKILL.md files to ~/.config/octapus/skills/<name>/');
+        } else {
+          const lines = all.map((s) => `${s.name.padEnd(30)} ${s.source === 'user' ? '[custom]' : '[bundled]'} — ${s.description.slice(0, 70)}`);
+          pushNote(`Skills (${all.length}) — auto-activated when relevant:\n${lines.join('\n')}`);
+        }
+        return true;
+      }
+
+      case '/learn': {
+        // Explicit self-development: store a lesson for future sessions
+        if (!args || args.length < 10) {
+          pushNote('Usage: /learn <lesson>  e.g. /learn PowerShell 5.1 has no && operator, use ; or if ($?)');
+        } else {
+          rememberFact(`lesson.${args.split(/\s+/).slice(0, 4).join('-').toLowerCase().replace(/[^a-z0-9-]/g, '')}`, args, 'manual');
+          refreshMemoryCount();
+          pushNote(`🧠 Lesson stored — I'll apply it from now on:\n${args}`);
         }
         return true;
       }

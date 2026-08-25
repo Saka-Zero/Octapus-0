@@ -11,6 +11,7 @@ import {
   forgetFact,
   rememberFact
 } from '../utils/memory';
+import { matchSkills, formatSkillsForPrompt } from '../utils/skills';
 import { Message } from '../providers';
 import {
   loadSession,
@@ -216,9 +217,9 @@ export function createChatCommand(router: Router): Command {
 }
 
 /**
- * Compose the final system prompt: user prompt (or genius default) + long-term memory
+ * Compose the final system prompt: user prompt (or genius default) + long-term memory + active skills
  */
-function buildSystemPrompt(config: any, userSystem?: string): string {
+function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string): string {
   const parts: string[] = [];
 
   const base = userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT;
@@ -227,6 +228,10 @@ function buildSystemPrompt(config: any, userSystem?: string): string {
   if (config.settings.useMemory !== false) {
     const memBlock = formatMemoryForPrompt();
     if (memBlock) parts.push(memBlock);
+  }
+
+  if (activeSkillText) {
+    parts.push(activeSkillText);
   }
 
   return parts.join('\n\n');
@@ -411,8 +416,14 @@ async function sendMessage(
   
   const messages = getMessagesForApi(session);
   
-  // Inject composed system prompt (genius default / user override + long-term memory)
-  const sysContent = buildSystemPrompt(config, options.system);
+  // Auto-match skills for this prompt
+  const matched = matchSkills(prompt);
+  if (matched.length > 0) {
+    console.log(chalk.gray(`  ⚡ Skills: ${matched.map(s => s.name).join(', ')}`));
+  }
+  
+  // Inject composed system prompt (genius default / user override + long-term memory + skills)
+  const sysContent = buildSystemPrompt(config, options.system, formatSkillsForPrompt(matched));
   if (sysContent) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {

@@ -86,6 +86,7 @@ export class Router {
 
   async *chat(options: RouterOptions): AsyncIterable<string> {
     const { model, messages, options: chatOptions, fallbackModels } = options;
+    const quiet = chatOptions?.quiet ?? false;
     const chain = this.getFallbackChain(model, fallbackModels, chatOptions?.disableFallback ?? false);
     
     if (chain.length === 0) {
@@ -93,7 +94,6 @@ export class Router {
     }
 
     let lastError: Error | null = null;
-    let isFirstChunk = true;
 
     for (const { provider, modelToUse } of chain) {
       try {
@@ -101,8 +101,8 @@ export class Router {
         this.lastProvider = provider.name;
         this.lastModel = modelToUse;
         
-        // Notify user if we're using a different model
-        if (modelToUse !== model && isFirstChunk) {
+        // Notify user if we're using a different model (skip in TUI/quiet mode)
+        if (!quiet && modelToUse !== model) {
           console.error(chalk.gray(`  (Using ${modelToUse} from ${provider.name} as fallback)`));
         }
         
@@ -113,8 +113,9 @@ export class Router {
         return; // Success
       } catch (err) {
         lastError = err as Error;
-        // Use styled error output instead of console.error
-        console.log(chalk.gray(`  [${provider.name}] ${err instanceof Error ? err.message : String(err)}`));
+        if (!quiet) {
+          console.log(chalk.gray(`  [${provider.name}] ${err instanceof Error ? err.message : String(err)}`));
+        }
         continue;
       }
     }
