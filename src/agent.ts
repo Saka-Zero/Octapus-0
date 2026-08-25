@@ -1,9 +1,10 @@
 import { Router } from './router';
 import { Message, ToolCall } from './providers';
-import { AGENT_TOOLS, executeTool, notifyAfterTool, ToolApproval, isPlanMode, setPlanMode, PLAN_ALLOWED } from './tools';
+import { AGENT_TOOLS, executeTool, notifyAfterTool, ToolApproval, isPlanMode, setPlanMode, PLAN_ALLOWED, setFocusSession } from './tools';
 import { pluginBeforeRequest } from './plugins';
 import { createCheckpoint } from './checkpoints';
 import { mcpManager, mcpToOpenAiTools, McpToolDef } from './mcp';
+import { getFocusChain } from './utils/focusChain';
 
 const MAX_ITERATIONS = 15;
 
@@ -42,7 +43,22 @@ export async function runAgentTurn(
   let finalText = '';
   let toolCallsMade = 0;
 
+  // Focus chain: session binding + periodic re-injection reminder
+  setFocusSession(options.sessionId || 'default');
+  const chainReminder = (): Message[] => {
+    const chain = getFocusChain(options.sessionId || 'default');
+    return chain
+      ? [{ role: 'user', content: `[Focus chain reminder — your current checklist:\n${chain}\nKeep it updated via task_progress.]` }, { role: 'assistant', content: 'Noted — continuing with the checklist in mind.' }]
+      : [];
+  };
+
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+    // Re-inject focus chain every 4 iterations so long tasks stay on track
+    if (iter > 0 && iter % 4 === 0) {
+      const reminder = chainReminder();
+      if (reminder.length) messages.push(...reminder);
+    }
+
     let turnText = '';
     let calls: ToolCall[] | null = null;
 

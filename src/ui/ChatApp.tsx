@@ -674,6 +674,13 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         return true;
       }
 
+      case '/chain': {
+        const { getFocusChain } = require('../utils/focusChain');
+        const chain = getFocusChain(sessionRef.current.id);
+        pushNote(chain ? `Focus chain:\n${chain}` : 'No focus chain — the agent creates one via task_progress during long tasks.');
+        return true;
+      }
+
       case '/theme': {
         if (!args) {
           pushNote(`Current theme: ${theme.name}. Available: ${listThemeNames().join(', ')}\nUsage: /theme <name>`);

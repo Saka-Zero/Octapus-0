@@ -4,7 +4,15 @@ import { execFile } from 'child_process';
 import { Tool } from './providers';
 import { researchQuery, webFetch } from './web';
 import { parseDiffBlocks, applyBlocks } from './diffEngine';
+import { setFocusChain } from './utils/focusChain';
 import { loadPlugins, pluginBeforeRequest, ToolHookResult } from './plugins';
+
+/** Session id used for focus-chain persistence (set by the agent loop) */
+let focusSessionId = 'default';
+export function setFocusSession(sessionId: string): void {
+  focusSessionId = sessionId || 'default';
+}
+const sessionIdRef = { get current() { return focusSessionId; } };
 
 /** Permission action from config: allow (skip approval) | ask | deny */
 export type PermissionAction = 'allow' | 'ask' | 'deny';
@@ -247,6 +255,31 @@ export const AGENT_TOOLS: Tool[] = [
   {
     type: 'function',
     function: {
+      name: 'task_progress',
+      description: 'Update your focus-chain checklist for this task. Call whenever you complete or discover a step. The chain persists across context compaction.',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: {
+            type: 'array',
+            description: 'Full checklist state (include ALL items, done and pending)',
+            items: {
+              type: 'object',
+              properties: {
+                text: { type: 'string' },
+                done: { type: 'boolean' }
+              },
+              required: ['text', 'done']
+            }
+          }
+        },
+        required: ['status']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'switch_to_act_mode',
       description: 'Request to exit plan mode and begin executing your implementation plan. Only call this after presenting a complete numbered plan.',
       parameters: {
@@ -342,6 +375,14 @@ export async function executeTool(
         (output) => ({ ok: true, output: cap(scrubSecrets(output)) }),
         (e) => ({ ok: false, output: `web_fetch failed: ${e instanceof Error ? e.message : e}` })
       );
+    case 'task_progress': {
+      const items = Array.isArray(args.status) ? args.status : [];
+      const lines = items
+        .filter((i: any) => i && typeof i.text === 'string')
+        .map((i: any) => `- [${i.done ? 'x' : ' '}] ${String(i.text).slice(0, 200)}`);
+      setFocusChain(sessionIdRef.current, lines.join('\n'));
+      return { ok: true, output: `Focus chain updated (${lines.filter((l: string) => l.startsWith('- [x]')).length}/${lines.length} done).` };
+    }
     default:
       return { ok: false, output: `Unknown tool: ${name}` };
   }
