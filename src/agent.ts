@@ -3,6 +3,7 @@ import { Message, ToolCall } from './providers';
 import { AGENT_TOOLS, executeTool, notifyAfterTool, ToolApproval, isPlanMode, setPlanMode, PLAN_ALLOWED } from './tools';
 import { pluginBeforeRequest } from './plugins';
 import { createCheckpoint } from './checkpoints';
+import { mcpManager, mcpToOpenAiTools, McpToolDef } from './mcp';
 
 const MAX_ITERATIONS = 15;
 
@@ -46,9 +47,16 @@ export async function runAgentTurn(
     let calls: ToolCall[] | null = null;
 
     // Plan mode restricts the toolset to research-only + elevation request
-    const activeTools = isPlanMode()
+    const baseTools = isPlanMode()
       ? AGENT_TOOLS.filter((t) => PLAN_ALLOWED.has(t.function.name) || t.function.name === 'switch_to_act_mode')
       : AGENT_TOOLS;
+
+    // Merge MCP server tools (non-plan mode only — they can have side effects)
+    let mcpDefs: McpToolDef[] = [];
+    if (!isPlanMode()) {
+      try { mcpDefs = await mcpManager.getAllTools(); } catch { /* MCP optional */ }
+    }
+    const activeTools = [...baseTools, ...mcpToOpenAiTools(mcpDefs)];
 
     for await (const ev of router.chat({
       model,
@@ -94,6 +102,21 @@ export async function runAgentTurn(
         continue;
       }
       toolCallsMade++;
+
+      // MCP tool dispatch: mcp_<server>_<tool>
+      if (call.function.name.startsWith('mcp_')) {
+        const rest = call.function.name.slice(4);
+        const sep = rest.indexOf('_');
+        const server = rest.slice(0, sep);
+        const toolName = rest.slice(sep + 1);
+        let mcpArgs: Record<string, unknown> = {};
+        try { mcpArgs = JSON.parse(call.function.arguments || '{}'); } catch {}
+        cb.onToolStart(call.function.name, call.function.arguments.slice(0, 200));
+        const r = await mcpManager.callTool(server, toolName, mcpArgs);
+        cb.onToolResult(call.function.name, r.ok, r.output);
+        messages.push({ role: 'tool', tool_call_id: call.id, content: `${r.ok ? 'OK' : 'ERROR'}: ${r.output}` });
+        continue;
+      }
 
       // Plan-mode elevation: model requests switch to act mode
       if (call.function.name === 'switch_to_act_mode') {

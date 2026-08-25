@@ -13,6 +13,7 @@ import { SessionPicker } from './SessionPicker';
 import { runAgentTurn } from '../agent';
 import { setPlanMode, isPlanMode } from '../tools';
 import { listCheckpoints, restoreCheckpoint } from '../checkpoints';
+import { mcpManager } from '../mcp';
 import { getTheme, listThemeNames } from './theme';
 import { execSync } from 'child_process';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS, Domain } from '../utils/roles';
@@ -393,6 +394,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           '/checkpoints       List auto-saved workspace snapshots',
           '/restore <n>       Restore files to checkpoint n',
           '/plugins           List loaded plugins',
+          '/mcp               List MCP servers & their tools',
           '/theme [name]      Switch theme (' + listThemeNames().join(', ') + ')',
           '/copy              Copy last AI response to clipboard'
         ].join('\n'));
@@ -649,6 +651,25 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           const r = await restoreCheckpoint(sessionRef.current.id, process.cwd(), target.hash);
           if (r.ok) pushNote(`⏪ ${r.output}`);
           else setDisplay((d) => [...d, { kind: 'error', text: `✗ ${r.output}` }]);
+        })();
+        return true;
+      }
+
+      case '/mcp': {
+        pushNote('Connecting to MCP servers…');
+        void (async () => {
+          const cfg = mcpManager.getConfig();
+          const names = Object.keys(cfg);
+          if (names.length === 0) {
+            pushNote('No MCP servers configured. Create ~/.config/octapus/mcp.json:\n{\n  "mcpServers": {\n    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/path"] }\n  }\n}\nTools appear automatically in agent mode.');
+            return;
+          }
+          const tools = await mcpManager.getAllTools();
+          const lines = names.map((n) => {
+            const count = tools.filter((t) => t.server === n).length;
+            return `● ${n} — ${count} tools`;
+          });
+          pushNote(`MCP servers:\n${lines.join('\n')}\n\nMCP tools are available in /agent mode as mcp_<server>_<tool>.`);
         })();
         return true;
       }
