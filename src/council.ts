@@ -82,6 +82,14 @@ export async function runCouncil(
     DOMAIN_PERSONAS[domain]
   ].filter(Boolean).join('\n\n');
 
+  // Token budgets scale with domain — code generation needs far more room
+  const heavy = domain === 'coding' || domain === 'security';
+  const budget = {
+    r1: heavy ? 4000 : 1200,
+    critique: 400,
+    synth: heavy ? 8000 : 2500
+  };
+
   const ask = async (participant: Participant, system: string, user: string, maxTokens: number): Promise<string> => {
     let out = '';
     for await (const ev of router.chat({
@@ -104,6 +112,7 @@ export async function runCouncil(
     })) {
       if (ev.type === 'text') out += ev.text;
     }
+    if (!out.trim()) throw new Error('empty response');
     return out.trim();
   };
 
@@ -112,12 +121,7 @@ export async function runCouncil(
   const askParticipant = async (p: Participant): Promise<{ p: Participant; text: string } | null> => {
     cb.onParticipant(p.provider, p.role, 'start');
     try {
-      const text = await ask(
-        p,
-        baseSystem,
-        `${prompt}\n\nAnswer with your full expert analysis.`,
-        900
-      );
+      const text = await ask(p, baseSystem, `${prompt}\n\nAnswer with your full expert analysis.`, budget.r1);
       cb.onParticipant(p.provider, p.role, 'done', `${text.length} chars`);
       return { p, text };
     } catch (err) {
@@ -127,13 +131,32 @@ export async function runCouncil(
   };
 
   const settled = await Promise.allSettled(participants.map(askParticipant));
-  const analyses = settled
+  let analyses = settled
     .filter((s): s is PromiseFulfilledResult<{ p: Participant; text: string }> => s.status === 'fulfilled' && s.value !== null)
     .map((s) => s.value);
+
+  // If too few survived, pull replacements from remaining healthy providers
+  if (analyses.length < 2) {
+    const usedNames = new Set(participants.map((p) => p.provider));
+    const status2 = router.getProviderStatus();
+    const health2 = router.getHealthSnapshot();
+    const backups = Object.entries(status2)
+      .filter(([name, s]) => s.enabled && s.models.length > 0 && !usedNames.has(name) && health2[name]?.usable !== false)
+      .sort((a, b) => b[1].priority - a[1].priority)
+      .slice(0, 3)
+      .map(([name, s]) => ({ provider: name, role: config.providers[name]?.role || 'general', model: s.models[0] }));
+
+    const extra = await Promise.allSettled(backups.map(askParticipant));
+    for (const s of extra) {
+      if (s.status === 'fulfilled' && s.value) analyses.push(s.value);
+    }
+  }
 
   if (analyses.length === 0) {
     throw new Error('All council members failed in round 1.');
   }
+  // Drop empty-text survivors from earlier rounds (defensive)
+  analyses = analyses.filter((a) => a.text.trim().length > 0);
 
   // ─── ROUND 2: Cross-examination (parallel) ────────────────────────
   cb.onPhase('⚔️ ROUND 2 — Cross-examination & debate (parallel)');
@@ -149,7 +172,7 @@ export async function runCouncil(
         a.p,
         `You are a critical peer reviewer. Identify concrete errors, missing angles, and risks in OTHER specialists' answers about the same question. Max 150 words, bullet points only.`,
         `ORIGINAL QUESTION:\n${prompt}\n\nOTHER SPECIALISTS' ANSWERS:\n${peers.map((x) => `=== ${x.p.provider} ===\n${x.text.slice(0, 1400)}`).join('\n\n')}\n\nCritique their answers: factual errors, security flaws, missed edge cases, and one thing they did better than you.`,
-        400
+        budget.critique
       );
       cb.onDebate(a.p.provider, text.slice(0, 220));
       return { p: a.p, text };
@@ -183,12 +206,12 @@ Rules:
   for await (const ev of router.chat({
     model: chairman.model,
     messages: [
-      { role: 'system', content: `You are the CHAIRMAN of an AI council. You receive multiple specialist analyses and peer critiques about one question, and must synthesize them into the single best possible answer. Be comprehensive but never redundant.` },
+      { role: 'system', content: `You are the CHAIRMAN of an AI council. You receive multiple specialist analyses and peer critiques about one question, and must synthesize them into the single best possible answer. Be comprehensive but never redundant. If the request asks for code, deliver the COMPLETE working code — never truncated.` },
       { role: 'user', content: synthesisInput }
     ],
     options: {
       model: chairman.model,
-      maxTokens: 2500,
+      maxTokens: budget.synth,
       temperature: 0.5,
       stream: true,
       disableFallback: false, // synthesis may fall back if chairman fails
@@ -198,6 +221,12 @@ Rules:
     fallbackModels: config.fallbackModels || []
   })) {
     if (ev.type === 'text') finalText += ev.text;
+  }
+
+  // Synthesis produced nothing → fall back to the strongest analysis
+  if (!finalText.trim()) {
+    const best = analyses.reduce((a, b) => (b.text.length > a.text.length ? b : a));
+    finalText = `${best.text}\n\n---\n*(Synthesis was empty — presenting ${best.p.provider}'s full analysis instead.)*`;
   }
 
   return {
