@@ -123,14 +123,23 @@ export function createChatCommand(router: Router): Command {
           }
         }
         console.log();
-        console.log(chalk.cyan('Get API keys:'));
-        console.log(chalk.gray('  Groq:       https://console.groq.com/keys'));
-        console.log(chalk.gray('  Cerebras:   https://cloud.cerebras.ai/'));
-        console.log(chalk.gray('  Gemini:     https://aistudio.google.com/apikey'));
-        console.log(chalk.gray('  SambaNova:  https://cloud.sambanova.ai/'));
-        console.log(chalk.gray('  Together:   https://api.together.xyz/'));
-        console.log(chalk.gray('  OpenRouter: https://openrouter.ai/keys'));
-        console.log(chalk.gray('  Novita:     https://novita.ai/'));
+        console.log(chalk.cyan('Get API keys (all have free tiers):'));
+        console.log(chalk.gray('  Groq:          https://console.groq.com/keys'));
+        console.log(chalk.gray('  Cerebras:      https://cloud.cerebras.ai/'));
+        console.log(chalk.gray('  Gemini:        https://aistudio.google.com/apikey'));
+        console.log(chalk.gray('  SambaNova:     https://cloud.sambanova.ai/'));
+        console.log(chalk.gray('  GitHub Models: https://github.com/settings/tokens (PAT with models scope)'));
+        console.log(chalk.gray('  Mistral:       https://console.mistral.ai/api-keys'));
+        console.log(chalk.gray('  NVIDIA NIM:    https://build.nvidia.com/'));
+        console.log(chalk.gray('  Cohere:        https://dashboard.cohere.com/api-keys'));
+        console.log(chalk.gray('  HuggingFace:   https://huggingface.co/settings/tokens'));
+        console.log(chalk.gray('  Together:      https://api.together.xyz/'));
+        console.log(chalk.gray('  OpenRouter:    https://openrouter.ai/keys'));
+        console.log(chalk.gray('  Zhipu GLM:     https://open.bigmodel.cn/ (glm-4-flash free)'));
+        console.log(chalk.gray('  Novita:        https://novita.ai/'));
+        console.log(chalk.gray('  SiliconFlow:   https://siliconflow.cn/'));
+        console.log(chalk.gray('  ModelScope:    https://modelscope.cn/'));
+        console.log(chalk.gray('  Pollinations:  NO KEY NEEDED — works out of the box!'));
         process.exit(1);
       }
 

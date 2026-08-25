@@ -7,11 +7,12 @@ export class OpenAICompatibleProvider implements Provider {
   private apiKey: string;
   private baseURL: string;
 
-  constructor(name: string, apiKey: string, baseURL: string, priority = 1) {
+  constructor(name: string, apiKey: string, baseURL: string, priority = 1, models: string[] = []) {
     this.name = name;
     this.apiKey = apiKey;
     this.baseURL = baseURL;
     this.priority = priority;
+    this.models = models;
   }
 
   async validateKey(): Promise<boolean> {

@@ -50,6 +50,18 @@ export function createModelsCommand(router: Router): Command {
       console.log(chalk.gray('─'.repeat(50)));
       console.log(chalk.gray(`Total models: ${allModels.length}`));
       console.log(chalk.gray(`Providers: ${Object.keys(status).length}`));
+
+      // Show known-but-disabled providers for discoverability
+      const disabled = Object.keys(config.providers).filter((n) => !status[n]);
+      if (disabled.length > 0) {
+        console.log();
+        console.log(chalk.cyan('Available to enable:') + chalk.gray('  (oct provider enable <name> && oct config set providers.<name>.apiKey <key>)'));
+        for (const name of disabled) {
+          const needsKey = name !== 'ollama' && name !== 'pollinations';
+          const hint = needsKey ? '' : chalk.green('  ← no key needed!');
+          console.log(chalk.gray(`  ○ ${name}${hint}`));
+        }
+      }
     });
 
   return cmd;

@@ -43,6 +43,33 @@ const PRICING: Record<string, Record<string, { input: number; output: number }>>
   },
   requesty: {
     '*': { input: 0.00015, output: 0.0006 }
+  },
+  'github-models': {
+    '*': { input: 0, output: 0 }
+  },
+  mistral: {
+    '*': { input: 0, output: 0 }
+  },
+  nvidia: {
+    '*': { input: 0, output: 0 }
+  },
+  cohere: {
+    '*': { input: 0, output: 0 }
+  },
+  huggingface: {
+    '*': { input: 0, output: 0 }
+  },
+  zhipu: {
+    '*': { input: 0, output: 0 }
+  },
+  siliconflow: {
+    '*': { input: 0, output: 0 }
+  },
+  modelscope: {
+    '*': { input: 0, output: 0 }
+  },
+  pollinations: {
+    '*': { input: 0, output: 0 }
   }
 };
 

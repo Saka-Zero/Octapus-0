@@ -69,8 +69,97 @@ function registerProviders(): void {
     router.register(new RequestyProvider(config.providers.requesty.apiKey, config.providers.requesty.baseURL));
   }
 
+  // ─── Free-tier providers (OpenAI-compatible) ─────────────────────
+  const freeProviders: Array<{
+    name: string;
+    baseURL: string;
+    priority: number;
+    models: string[];
+    needsKey: boolean;
+  }> = [
+    {
+      name: 'github-models',
+      baseURL: 'https://models.inference.ai.azure.com',
+      priority: 6,
+      needsKey: true,
+      models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'Meta-Llama-3.1-405B-Instruct', 'Phi-4']
+    },
+    {
+      name: 'mistral',
+      baseURL: 'https://api.mistral.ai/v1',
+      priority: 6,
+      needsKey: true,
+      models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest', 'ministral-8b-latest']
+    },
+    {
+      name: 'nvidia',
+      baseURL: 'https://integrate.api.nvidia.com/v1',
+      priority: 5,
+      needsKey: true,
+      models: ['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct', 'deepseek-ai/deepseek-r1', 'qwen/qwen2.5-coder-32b-instruct']
+    },
+    {
+      name: 'cohere',
+      baseURL: 'https://api.cohere.ai/compatibility/v1',
+      priority: 5,
+      needsKey: true,
+      models: ['command-r-plus-08-2024', 'command-r-08-2024', 'command-r7b-12-2024']
+    },
+    {
+      name: 'huggingface',
+      baseURL: 'https://router.huggingface.co/v1',
+      priority: 4,
+      needsKey: true,
+      models: ['Qwen/Qwen2.5-72B-Instruct', 'meta-llama/Llama-3.3-70B-Instruct', 'deepseek-ai/DeepSeek-V3']
+    },
+    {
+      name: 'zhipu',
+      baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+      priority: 3,
+      needsKey: true,
+      models: ['glm-4-flash', 'glm-4-plus', 'glm-4-air', 'codegeex-4']
+    },
+    {
+      name: 'siliconflow',
+      baseURL: 'https://api.siliconflow.cn/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['Qwen/Qwen2.5-7B-Instruct', 'THUDM/glm-4-9b-chat', 'deepseek-ai/DeepSeek-V3']
+    },
+    {
+      name: 'modelscope',
+      baseURL: 'https://api-inference.modelscope.cn/v1',
+      priority: 2,
+      needsKey: true,
+      models: ['Qwen/Qwen2.5-72B-Instruct', 'Qwen/Qwen2.5-Coder-32B-Instruct']
+    },
+    {
+      // Zero-setup: works without any API key
+      name: 'pollinations',
+      baseURL: 'https://text.pollinations.ai/openai',
+      priority: 1,
+      needsKey: false,
+      models: ['openai', 'openai-fast', 'mistral', 'llama', 'qwen-coder']
+    }
+  ];
+
+  for (const fp of freeProviders) {
+    const cfg = config.providers[fp.name];
+    if (!cfg?.enabled) continue;
+    if (fp.needsKey && !cfg.apiKey) continue;
+    router.register(
+      new OpenAICompatibleProvider(
+        fp.name,
+        cfg.apiKey || 'none',
+        cfg.baseURL || fp.baseURL,
+        cfg.priority ?? fp.priority,
+        fp.models
+      )
+    );
+  }
+
   // Register any custom providers (added via `provider add`)
-  const knownProviders = ['groq', 'cerebras', 'gemini', 'sambanova', 'ollama', 'together', 'openrouter', 'novita', 'requesty'];
+  const knownProviders = ['groq', 'cerebras', 'gemini', 'sambanova', 'ollama', 'together', 'openrouter', 'novita', 'requesty', ...freeProviders.map(f => f.name)];
   for (const [name, cfg] of Object.entries(config.providers)) {
     if (knownProviders.includes(name)) continue;
     if (!cfg?.enabled || !cfg.apiKey || !cfg.baseURL) continue;

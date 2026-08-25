@@ -39,11 +39,21 @@ const DEFAULT_CONFIG: Config = {
     cerebras: { apiKey: '', priority: 9, enabled: false },
     gemini: { apiKey: '', priority: 8, enabled: false },
     sambanova: { apiKey: '', priority: 7, enabled: false },
-    ollama: { baseURL: 'http://localhost:11434', priority: 5, enabled: false },
+    ollama: { baseURL: 'http://localhost:11434', priority: 7, enabled: false },
+    'github-models': { apiKey: '', priority: 6, enabled: false },
+    mistral: { apiKey: '', priority: 6, enabled: false },
+    nvidia: { apiKey: '', priority: 5, enabled: false },
+    cohere: { apiKey: '', priority: 5, enabled: false },
+    huggingface: { apiKey: '', priority: 4, enabled: false },
     together: { apiKey: '', priority: 4, enabled: false },
     openrouter: { apiKey: '', priority: 3, enabled: false },
+    zhipu: { apiKey: '', priority: 3, enabled: false },
     novita: { apiKey: '', priority: 2, enabled: false },
-    requesty: { apiKey: '', priority: 1, enabled: false }
+    requesty: { apiKey: '', priority: 2, enabled: false },
+    siliconflow: { apiKey: '', priority: 2, enabled: false },
+    modelscope: { apiKey: '', priority: 2, enabled: false },
+    // Works with NO API key — zero-setup free provider
+    pollinations: { baseURL: 'https://text.pollinations.ai/openai', apiKey: '', priority: 1, enabled: true }
   },
   defaultModel: 'llama-3.3-70b-versatile',
   fallbackModels: [
