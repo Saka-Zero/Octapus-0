@@ -39,6 +39,7 @@ export function createChatCommand(router: Router): Command {
     .option('--max-tokens <value>', 'Max tokens', parseInt)
     .option('--no-stream', 'Disable streaming')
     .option('--no-fallback', 'Disable fallback to other providers')
+    .option('--no-council', 'Skip multi-AI council deliberation (council is default-on)')
     .option('--new', 'Start a new conversation (clear history)')
     .option('--history', 'Show recent conversation history')
     .option('--sessions', 'List all conversation sessions')
@@ -455,7 +456,20 @@ async function sendMessage(
     spinner.start();
     
     let spinnerStopped = false;
-    
+
+    // Council mode (default ON): all specialists deliberate → one super answer
+    if (config.settings.councilMode !== false && !options.noCouncil) {
+      const { runCouncil } = await import('../council');
+      const result = await runCouncil(router, prompt, messages, config, options, {
+        onPhase: (p) => { if (!spinnerStopped) { spinner.stop(); spinnerStopped = true; } console.log(chalk.gray(`  ${p}`)); },
+        onParticipant: (prov, role, st, d) => {
+          const icon = st === 'start' ? '⏳' : st === 'done' ? '✔' : '✗';
+          console.log(chalk.gray(`  ${icon} ${prov} [${role}]${d ? ` — ${d}` : ''}`));
+        },
+        onDebate: (prov, pts) => console.log(chalk.gray(`  ⚔️ ${prov}: ${pts.slice(0, 160)}…`))
+      });
+      fullResponse = result.finalText;
+    } else {
     for await (const ev of router.chat({
       model,
       messages,
@@ -480,6 +494,7 @@ async function sendMessage(
         process.stdout.write(chalk.gray(`\n  (Model attempted tool use: ${ev.calls.map((c: any) => c.function.name).join(', ')}. Use interactive mode + /agent to allow execution.)\n`));
       }
     }
+    } // end non-council branch
     
     console.log();
     

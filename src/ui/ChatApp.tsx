@@ -133,7 +133,8 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
-  const [councilMode, setCouncilMode] = useState(false);
+  // Council is the DEFAULT experience: every prompt = all specialists deliberate
+  const [councilMode, setCouncilMode] = useState(config.settings.councilMode !== false);
   const [pendingApproval, setPendingApproval] = useState<{ tool: string; summary: string; resolve: (ok: boolean) => void } | null>(null);
 
   const sessionRef = useRef<ConversationSession>(initialSession);
@@ -448,10 +449,13 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       }
 
       case '/council': {
-        setCouncilMode((v) => !v);
-        pushNote(councilMode
-          ? '🏛️ Council mode OFF — back to single specialist.'
-          : '🏛️ Council mode ON — every prompt goes to a round of ALL active specialists: independent analysis → cross-debate → synthesis into one super answer. Slower but mighty.');
+        const next = !councilMode;
+        setCouncilMode(next);
+        config.settings.councilMode = next;
+        saveConfig(config);
+        pushNote(next
+          ? '🏛️ Council mode ON — every prompt goes to a round of ALL active specialists: independent analysis → cross-debate → synthesis into one super answer.'
+          : '💬 Council mode OFF — single specialist answers (faster).');
         return true;
       }
 
@@ -607,6 +611,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
           <Text color={theme.primary} bold>octapus</Text>
           <Text color={theme.textMuted}> v0.1.0</Text>
           {agentMode && <Text color={theme.warning} bold> · agent</Text>}
+          {councilMode && <Text color={theme.accent} bold> · 🏛️ council</Text>}
           <Text color={theme.textMuted}>{'  │  '}</Text>
           <Text color={theme.accent}>{headerModel}</Text>
           <Text color={theme.textMuted}>

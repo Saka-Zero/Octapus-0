@@ -212,4 +212,13 @@ export class Router {
     }
     return status;
   }
+
+  /** Circuit-breaker state per provider — for council pre-filter & diagnostics */
+  getHealthSnapshot(): Record<string, { usable: boolean; probing: boolean; reason?: string }> {
+    const out: Record<string, { usable: boolean; probing: boolean; reason?: string }> = {};
+    for (const name of this.providers.keys()) {
+      out[name] = this.health.getState(name);
+    }
+    return out;
+  }
 }

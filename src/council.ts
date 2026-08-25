@@ -47,13 +47,19 @@ export async function runCouncil(
   const matched = matchSkills(prompt);
   const skillText = formatSkillsForPrompt(matched);
 
-  // Pick participants: top-N active providers by priority
+  // Pick participants: top-N active providers by priority, healthy first.
+  // Unhealthy providers are only used if we can't fill the council otherwise.
   const size = Math.max(2, Math.min(5, config.settings.councilSize || 3));
   const status = router.getProviderStatus();
-  const participants: Participant[] = Object.entries(status)
+  const health = router.getHealthSnapshot();
+  const all = Object.entries(status)
     .filter(([, s]) => s.enabled && s.models.length > 0)
-    .sort((a, b) => b[1].priority - a[1].priority)
-    .slice(0, size)
+    .sort((a, b) => b[1].priority - a[1].priority);
+
+  const healthy = all.filter(([name]) => health[name]?.usable !== false);
+  const unhealthy = all.filter(([name]) => health[name]?.usable === false);
+  const chosen = [...healthy, ...unhealthy].slice(0, size);
+  const participants: Participant[] = chosen
     .map(([name, s]) => ({ provider: name, role: config.providers[name]?.role || 'general', model: s.models[0] }));
 
   if (participants.length < 2) {
