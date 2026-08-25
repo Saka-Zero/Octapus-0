@@ -13,6 +13,8 @@ export interface CouncilCallbacks {
   onParticipant: (provider: string, role: string, status: 'start' | 'done' | 'fail', detail?: string) => void;
   /** Debate highlights from a participant */
   onDebate: (provider: string, points: string) => void;
+  /** Live synthesis chunks (Round 3 streams to the user) */
+  onSynthesis?: (chunk: string) => void;
 }
 
 export interface CouncilResult {
@@ -183,11 +185,13 @@ export async function runCouncil(
     try {
       const text = await ask(
         a.p,
-        `You are a critical peer reviewer. Identify concrete errors, missing angles, and risks in OTHER specialists' answers about the same question. Max 150 words, bullet points only.`,
-        `ORIGINAL QUESTION:\n${prompt}\n\nOTHER SPECIALISTS' ANSWERS:\n${peers.map((x) => `=== ${x.p.provider} ===\n${x.text.slice(0, 1400)}`).join('\n\n')}\n\nCritique their answers: factual errors, security flaws, missed edge cases, and one thing they did better than you.`,
+        `You are a critical peer reviewer. Output ONLY bullet points starting with "-". NO preamble, NO restating the task, NO meta-commentary about the instructions. Directly list: factual errors, missing angles, risks in the OTHER answers, and one thing another specialist did better. Max 150 words.`,
+        `ORIGINAL QUESTION:\n${prompt}\n\nOTHER SPECIALISTS' ANSWERS:\n${peers.map((x) => `=== ${x.p.provider} ===\n${x.text.slice(0, 1400)}`).join('\n\n')}\n\nCritique their answers now (bullets only):`,
         budget.critique
       );
-      cb.onDebate(a.p.provider, text.slice(0, 220));
+      // Strip any leading meta-preamble the model still emits
+      const cleaned = text.replace(/^[\s\S]*?(?=(?:^|\n)-\s)/m, '').trim() || text.trim();
+      cb.onDebate(a.p.provider, cleaned.slice(0, 220));
       return { p: a.p, text };
     } catch {
       return null; // debate is optional per participant
@@ -238,7 +242,10 @@ Rules:
     },
     fallbackModels: config.fallbackModels || []
   })) {
-    if (ev.type === 'text') finalText += ev.text;
+    if (ev.type === 'text') {
+      finalText += ev.text;
+      cb.onSynthesis?.(ev.text);
+    }
   }
 
   // Synthesis produced nothing → fall back to the strongest analysis

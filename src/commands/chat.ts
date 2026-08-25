@@ -488,12 +488,15 @@ async function sendMessage(
           const icon = st === 'start' ? '⏳' : st === 'done' ? '✔' : '✗';
           console.log(chalk.gray(`  ${icon} ${prov} [${role}]${d ? ` — ${d}` : ''}`));
         },
-        onDebate: (prov, pts) => console.log(chalk.gray(`  ⚔️ ${prov}: ${pts.slice(0, 160)}…`))
+        onDebate: (prov, pts) => console.log(chalk.gray(`  ⚔️ ${prov}: ${pts.slice(0, 160)}…`)),
+        onSynthesis: (chunk) => {
+          if (!spinnerStopped) { spinner.stop(); spinnerStopped = true; }
+          process.stdout.write(chalk.green(chunk));
+        }
       });
       fullResponse = result.finalText;
       // CRITICAL: actually print the synthesized answer to the user
       console.log();
-      console.log(chalk.green(fullResponse));
       console.log();
     } else {
     for await (const ev of router.chat({
