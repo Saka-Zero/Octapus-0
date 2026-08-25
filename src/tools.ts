@@ -3,6 +3,7 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { Tool } from './providers';
 import { researchQuery, webFetch } from './web';
+import { parseDiffBlocks, applyBlocks } from './diffEngine';
 import { loadPlugins, pluginBeforeRequest, ToolHookResult } from './plugins';
 
 /** Permission action from config: allow (skip approval) | ask | deny */
@@ -231,6 +232,21 @@ export const AGENT_TOOLS: Tool[] = [
   {
     type: 'function',
     function: {
+      name: 'replace_in_file',
+      description: 'Make surgical edits to an existing file using SEARCH/REPLACE blocks instead of rewriting the whole file. Format per block:\n<<<<<<< SEARCH\n[exact existing lines]\n=======\n[new lines]\n>>>>>>> REPLACE\nMultiple blocks allowed; empty REPLACE deletes; match is whitespace-tolerant on line ends.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File to edit' },
+          diff: { type: 'string', description: 'One or more SEARCH/REPLACE blocks' }
+        },
+        required: ['path', 'diff']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'switch_to_act_mode',
       description: 'Request to exit plan mode and begin executing your implementation plan. Only call this after presenting a complete numbered plan.',
       parameters: {
@@ -308,6 +324,8 @@ export async function executeTool(
       return doReadFile(String(args.path || ''));
     case 'write_file':
       return doWriteFile(String(args.path || ''), String(args.content ?? ''), effectiveApprove);
+    case 'replace_in_file':
+      return doReplaceInFile(String(args.path || ''), String(args.diff ?? ''), effectiveApprove);
     case 'list_dir':
       return doListDir(String(args.path || '.'));
     case 'run_command':
@@ -409,6 +427,45 @@ async function doWriteFile(p: string, content: string, approve?: ToolApproval): 
     };
   } catch (e) {
     return { ok: false, output: `write_file failed: ${e instanceof Error ? e.message : e}` };
+  }
+}
+
+/** Surgical SEARCH/REPLACE edit — falls back with precise errors for self-correction */
+async function doReplaceInFile(p: string, diffText: string, approve?: ToolApproval): Promise<ToolResult> {
+  try {
+    const resolved = path.resolve(p);
+    if (!fs.existsSync(resolved)) {
+      return { ok: false, output: `File not found: ${resolved}. Use write_file to create it.` };
+    }
+    const blocks = parseDiffBlocks(diffText);
+    if (blocks.length === 0) {
+      return { ok: false, output: 'No valid SEARCH/REPLACE blocks found in diff. Format:\n<<<<<<< SEARCH\n[existing]\n=======\n[new]\n>>>>>>> REPLACE' };
+    }
+
+    const oldContent = fs.readFileSync(resolved, 'utf8');
+    const applied = applyBlocks(oldContent, blocks);
+    if (!applied.ok) {
+      return {
+        ok: false,
+        output: `Diff applied partially or not at all (${applied.appliedCount}/${blocks.length} blocks).\n${applied.errors.join('\n')}\nFix the SEARCH content and retry, or use write_file for a full rewrite.`
+      };
+    }
+
+    if (approve) {
+      const ok = await approve('replace_in_file', `edit ${resolved} (${blocks.length} block${blocks.length > 1 ? 's' : ''})`);
+      if (!ok) return { ok: false, output: 'User denied this edit.' };
+    }
+    if (fs.existsSync(resolved)) checkpointFile(resolved);
+    fs.writeFileSync(resolved, applied.result, 'utf8');
+
+    const diff = diffLines(oldContent, applied.result);
+    return {
+      ok: true,
+      output: `Edited ${resolved} (${applied.appliedCount}/${blocks.length} blocks applied) [checkpoint saved]`,
+      diff
+    };
+  } catch (e) {
+    return { ok: false, output: `replace_in_file failed: ${e instanceof Error ? e.message : e}` };
   }
 }
 
