@@ -13,6 +13,7 @@ import {
 } from '../utils/memory';
 import { matchSkills, formatSkillsForPrompt } from '../utils/skills';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS } from '../utils/roles';
+import { formatProjectContext } from '../utils/projectContext';
 import { Message } from '../providers';
 import {
   loadSession,
@@ -237,6 +238,11 @@ function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: s
 
   if (persona) {
     parts.push(persona);
+  }
+
+  const projectCtx = formatProjectContext();
+  if (projectCtx) {
+    parts.push(projectCtx);
   }
 
   return parts.join('\n\n');

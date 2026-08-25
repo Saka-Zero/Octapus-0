@@ -2,6 +2,7 @@ import { Router } from './router';
 import { Message } from './providers';
 import { classifyIntent, DOMAIN_PERSONAS, domainLabel } from './utils/roles';
 import { matchSkills, formatSkillsForPrompt } from './utils/skills';
+import { formatProjectContext } from './utils/projectContext';
 import { DEFAULT_SYSTEM_PROMPT } from './config';
 
 export interface CouncilCallbacks {
@@ -25,11 +26,7 @@ interface Participant {
   model: string;
 }
 
-const DEBOUNCE_MS = 400; // stay under anonymous rate limits (llm7 ~1rps)
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const DEBOUNCE_MS = 400; // reserved: re-enable between calls if a provider tightens rate limits
 
 /**
  * COUNCIL MODE — true multi-AI deliberation:
@@ -74,6 +71,7 @@ export async function runCouncil(
 
   const baseSystem = [
     options.system || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+    formatProjectContext(),
     skillText,
     DOMAIN_PERSONAS[domain]
   ].filter(Boolean).join('\n\n');
@@ -103,10 +101,9 @@ export async function runCouncil(
     return out.trim();
   };
 
-  // ─── ROUND 1: Independent analysis ────────────────────────────────
-  cb.onPhase('📋 ROUND 1 — Independent analysis');
-  const analyses: Array<{ p: Participant; text: string }> = [];
-  for (const p of participants) {
+  // ─── ROUND 1: Independent analysis (parallel) ─────────────────────
+  cb.onPhase('📋 ROUND 1 — Independent analysis (parallel)');
+  const askParticipant = async (p: Participant): Promise<{ p: Participant; text: string } | null> => {
     cb.onParticipant(p.provider, p.role, 'start');
     try {
       const text = await ask(
@@ -115,28 +112,32 @@ export async function runCouncil(
         `${prompt}\n\nAnswer with your full expert analysis.`,
         900
       );
-      analyses.push({ p, text });
       cb.onParticipant(p.provider, p.role, 'done', `${text.length} chars`);
+      return { p, text };
     } catch (err) {
       cb.onParticipant(p.provider, p.role, 'fail', err instanceof Error ? err.message.slice(0, 80) : 'failed');
+      return null;
     }
-    await sleep(DEBOUNCE_MS);
-  }
+  };
+
+  const settled = await Promise.allSettled(participants.map(askParticipant));
+  const analyses = settled
+    .filter((s): s is PromiseFulfilledResult<{ p: Participant; text: string }> => s.status === 'fulfilled' && s.value !== null)
+    .map((s) => s.value);
 
   if (analyses.length === 0) {
     throw new Error('All council members failed in round 1.');
   }
 
-  // ─── ROUND 2: Cross-examination ───────────────────────────────────
-  cb.onPhase('⚔️ ROUND 2 — Cross-examination & debate');
+  // ─── ROUND 2: Cross-examination (parallel) ────────────────────────
+  cb.onPhase('⚔️ ROUND 2 — Cross-examination & debate (parallel)');
   const peerDigest = analyses
     .map((a) => `=== ${a.p.provider} (${a.p.role}) ===\n${a.text.slice(0, 1800)}`)
     .join('\n\n');
 
-  const critiques: Array<{ p: Participant; text: string }> = [];
-  for (const a of analyses) {
+  const critiqueParticipant = async (a: { p: Participant; text: string }): Promise<{ p: Participant; text: string } | null> => {
     const peers = analyses.filter((x) => x.p !== a.p);
-    if (peers.length === 0) break;
+    if (peers.length === 0) return null;
     try {
       const text = await ask(
         a.p,
@@ -144,13 +145,17 @@ export async function runCouncil(
         `ORIGINAL QUESTION:\n${prompt}\n\nOTHER SPECIALISTS' ANSWERS:\n${peers.map((x) => `=== ${x.p.provider} ===\n${x.text.slice(0, 1400)}`).join('\n\n')}\n\nCritique their answers: factual errors, security flaws, missed edge cases, and one thing they did better than you.`,
         400
       );
-      critiques.push({ p: a.p, text });
       cb.onDebate(a.p.provider, text.slice(0, 220));
+      return { p: a.p, text };
     } catch {
-      // debate is optional per participant
+      return null; // debate is optional per participant
     }
-    await sleep(DEBOUNCE_MS);
-  }
+  };
+
+  const critiques = (await Promise.allSettled(analyses.map(critiqueParticipant)))
+    .filter((s): s is PromiseFulfilledResult<{ p: Participant; text: string } | null> => s.status === 'fulfilled')
+    .map((s) => s.value)
+    .filter((v): v is { p: Participant; text: string } => v !== null);
 
   // ─── ROUND 3: Synthesis ───────────────────────────────────────────
   cb.onPhase('⚖️ ROUND 3 — Synthesis into final answer');

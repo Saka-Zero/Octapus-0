@@ -187,6 +187,29 @@ async function doReadFile(p: string): Promise<ToolResult> {
   }
 }
 
+const BACKUP_DIR = path.join(
+  process.env.HOME || process.env.USERPROFILE || '',
+  '.config', 'octapus', 'backups'
+);
+
+/** Snapshot a file before the agent overwrites it (undo safety net). */
+function checkpointFile(resolved: string): void {
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeName = resolved.replace(/[\\/]/g, '__');
+    const dest = path.join(BACKUP_DIR, `${stamp}__${safeName}.bak`);
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    fs.copyFileSync(resolved, dest);
+    // Prune: keep newest 50 backups
+    const all = fs.readdirSync(BACKUP_DIR).sort().reverse();
+    for (const old of all.slice(50)) {
+      fs.unlinkSync(path.join(BACKUP_DIR, old));
+    }
+  } catch {
+    // checkpoint is best-effort; never block the write
+  }
+}
+
 async function doWriteFile(p: string, content: string, approve?: ToolApproval): Promise<ToolResult> {
   try {
     if (content.length > MAX_FILE_WRITE) return { ok: false, output: 'Content too large (>512KB)' };
@@ -199,13 +222,14 @@ async function doWriteFile(p: string, content: string, approve?: ToolApproval): 
       const ok = await approve('write_file', `${action} (${content.length} bytes)`);
       if (!ok) return { ok: false, output: 'User denied this write.' };
     }
+    if (existed) checkpointFile(resolved);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     fs.writeFileSync(resolved, content, 'utf8');
 
     const diff = diffLines(oldContent, content);
     return {
       ok: true,
-      output: `${existed ? 'Updated' : 'Created'} ${resolved} (${content.length} bytes)`,
+      output: `${existed ? 'Updated' : 'Created'} ${resolved} (${content.length} bytes)${existed ? ' [checkpoint saved]' : ''}`,
       diff
     };
   } catch (e) {

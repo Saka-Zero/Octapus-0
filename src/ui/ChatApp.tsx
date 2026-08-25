@@ -15,6 +15,9 @@ import { getTheme, listThemeNames } from './theme';
 import { execSync } from 'child_process';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS, Domain } from '../utils/roles';
 import { runCouncil } from '../council';
+import * as fs from 'fs';
+import * as path from 'path';
+import { formatProjectContext } from '../utils/projectContext';
 
 interface ChatAppProps {
   router: Router;
@@ -65,6 +68,8 @@ function ApprovalPrompt({ tool, summary, onDecision }: { tool: string; summary: 
 function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string, persona?: string): string {
   const parts: string[] = [];
   parts.push(userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
+  const projectCtx = formatProjectContext();
+  if (projectCtx) parts.push(projectCtx);
   if (config.settings.useMemory !== false) {
     const facts = getAllFacts();
     if (facts.length > 0) {
@@ -184,6 +189,29 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       const idx = messages.findIndex((m) => m.role === 'system');
       if (idx >= 0) messages[idx] = { role: 'system', content: sysContent };
       else messages.unshift({ role: 'system', content: sysContent });
+    }
+
+    // @file mentions — attach referenced files to the request
+    const mentions = [...prompt.matchAll(/@([\w./\\-]+)/g)].map((m) => m[1]);
+    let attachments = '';
+    for (const rel of mentions.slice(0, 5)) {
+      try {
+        const fp = path.resolve(rel);
+        const stat = fs.statSync(fp);
+        if (!stat.isFile() || stat.size > 200 * 1024) {
+          pushNote(`⚠ @${rel}: not a file or too large (>200KB)`);
+          continue;
+        }
+        const content = fs.readFileSync(fp, 'utf8');
+        attachments += `\n\n[Attached file: ${rel}]\n\`\`\`\n${content.slice(0, 40000)}${content.length > 40000 ? '\n… (truncated)' : ''}\n\`\`\``;
+        pushNote(`📎 Attached ${rel} (${content.length} chars)`);
+      } catch {
+        pushNote(`⚠ @${rel}: not found`);
+      }
+    }
+    if (attachments) {
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUser) lastUser.content += `\n${attachments}`;
     }
 
     const model = sessionRef.current.model;
