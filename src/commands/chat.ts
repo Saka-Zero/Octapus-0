@@ -180,7 +180,14 @@ export function createChatCommand(router: Router): Command {
 
       // ===== INTERACTIVE MODE (no prompt provided) =====
       if (!prompt) {
-        await startInteractiveMode(router, session, config, options);
+        if (process.env.OCTAPUS_PLAIN === '1' || !process.stdin.isTTY) {
+          // Plain readline fallback (minimal terminals / piped input): OCTAPUS_PLAIN=1 oct chat
+          await startInteractiveMode(router, session, config, options);
+        } else {
+          const { startTui } = await import('../ui/startTui');
+          await startTui(router, session, config, options);
+          console.log(chalk.gray('\nSession saved. Goodbye!'));
+        }
         return;
       }
 

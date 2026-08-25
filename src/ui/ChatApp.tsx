@@ -1,0 +1,333 @@
+import { useState, useRef, useEffect } from 'react';
+import { Box, Text, Static, useApp, useInput } from 'ink';
+import { Router } from '../router';
+import { ConversationSession, saveSession, createSession, addMessage, getMessagesForApi, getHistoryText, clearAllHistory } from '../utils/history';
+import { learnFromMessage, getAllFacts, rememberFact, forgetFact } from '../utils/memory';
+import { estimateTokens, calculateCost, formatCost } from '../utils';
+import { DEFAULT_SYSTEM_PROMPT } from '../config';
+import { renderMarkdown } from './markdown';
+import { TextInput } from './TextInput';
+
+interface ChatAppProps {
+  router: Router;
+  session: ConversationSession;
+  config: any;
+  options: any;
+}
+
+type DisplayItem =
+  | { kind: 'user'; text: string }
+  | { kind: 'assistant'; text: string }
+  | { kind: 'note'; text: string }
+  | { kind: 'error'; text: string };
+
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+function Spinner({ label }: { label: string }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <Box>
+      <Text color="cyan">{SPINNER_FRAMES[frame]} </Text>
+      <Text dim>{label}</Text>
+    </Box>
+  );
+}
+
+function buildSystemPrompt(config: any, userSystem?: string): string {
+  const parts: string[] = [];
+  parts.push(userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
+  if (config.settings.useMemory !== false) {
+    const facts = getAllFacts();
+    if (facts.length > 0) {
+      const lines = facts.slice(0, 30).map((f) => `- ${f.key}: ${f.value}`);
+      parts.push(`[Long-term memory about the user — always apply this context]\n${lines.join('\n')}`);
+    }
+  }
+  return parts.join('\n\n');
+}
+
+export function ChatApp({ router, session: initialSession, config, options }: ChatAppProps) {
+  const { exit } = useApp();
+
+  const [display, setDisplay] = useState<DisplayItem[]>([]);
+  const [streaming, setStreaming] = useState<string | null>(null);
+  const [thinking, setThinking] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const sessionRef = useRef<ConversationSession>(initialSession);
+  const [headerModel, setHeaderModel] = useState(initialSession.model);
+  const [headerSessionId, setHeaderSessionId] = useState(initialSession.id);
+  const [memoryCount, setMemoryCount] = useState(getAllFacts().length);
+
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const [totals, setTotals] = useState({ tokensIn: 0, tokensOut: 0, cost: 0 });
+  const lastProviderRef = useRef('');
+
+  const pushNote = (text: string) => setDisplay((d) => [...d, { kind: 'note', text }]);
+  const refreshMemoryCount = () => setMemoryCount(getAllFacts().length);
+
+  // ─── Core send flow ───────────────────────────────────────────────
+  const sendToAI = async (prompt: string) => {
+    setBusy(true);
+    setDisplay((d) => [...d, { kind: 'user', text: prompt }]);
+    setInputHistory((h) => [...h, prompt]);
+
+    // Persist user message BEFORE the API call (survives failures)
+    addMessage(sessionRef.current, 'user', prompt);
+
+    // Auto-learn facts
+    const learned = learnFromMessage(prompt);
+    if (learned.length > 0) {
+      pushNote(`🧠 Remembered: ${learned.join(', ')}`);
+      refreshMemoryCount();
+    }
+
+    const messages = getMessagesForApi(sessionRef.current);
+    const sysContent = buildSystemPrompt(config, options.system);
+    if (sysContent) {
+      const idx = messages.findIndex((m) => m.role === 'system');
+      if (idx >= 0) messages[idx] = { role: 'system', content: sysContent };
+      else messages.unshift({ role: 'system', content: sysContent });
+    }
+
+    const model = sessionRef.current.model;
+    const startTime = Date.now();
+    let full = '';
+
+    setThinking(true);
+    try {
+      for await (const chunk of router.chat({
+        model,
+        messages,
+        options: {
+          model,
+          temperature: options.temperature ?? config.settings.temperature,
+          maxTokens: options.maxTokens ?? config.settings.maxTokens,
+          stream: options.stream ?? config.settings.stream,
+          disableFallback: options.fallback === false
+        },
+        fallbackModels: options.fallback ? config.fallbackModels : []
+      })) {
+        setThinking(false);
+        full += chunk;
+        setStreaming(full);
+      }
+
+      addMessage(sessionRef.current, 'assistant', full);
+      setDisplay((d) => [...d, { kind: 'assistant', text: full }]);
+
+      // Update running totals
+      const tIn = estimateTokens(messages.map((m) => m.content).join(' '));
+      const tOut = estimateTokens(full);
+      const usage = { input: Math.round(tIn), output: Math.round(tOut), total: Math.round(tIn + tOut) };
+      const cost = calculateCost(router.lastProvider || 'unknown', router.lastModel || model, usage);
+      lastProviderRef.current = router.lastProvider || '';
+      setTotals((t) => ({ tokensIn: t.tokensIn + usage.input, tokensOut: t.tokensOut + usage.output, cost: t.cost + cost }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDisplay((d) => [...d, { kind: 'error', text: `✗ ${msg}` }]);
+      pushNote('(Your message was saved. Try again or switch model via /model)');
+    } finally {
+      setStreaming(null);
+      setThinking(false);
+      setBusy(false);
+    }
+  };
+
+  // ─── Slash commands ───────────────────────────────────────────────
+  const handleSlash = (input: string): boolean => {
+    const cmd = input.split(' ')[0].toLowerCase();
+    const args = input.slice(cmd.length).trim();
+
+    switch (cmd) {
+      case '/quit':
+      case '/exit':
+      case '/q':
+        exit();
+        return true;
+
+      case '/help': {
+        const help = [
+          '/quit, /exit, /q   Exit interactive mode',
+          '/history           Show conversation history',
+          '/clear             Clear ALL history & start new session',
+          '/new               Start new session (keep old in scrollback)',
+          '/model [name]      Show or change model',
+          '/memory            Show long-term memory facts',
+          '/remember <k> <v>  Store a fact permanently',
+          '/forget <key>      Delete a memory fact'
+        ].join('\n');
+        pushNote(help);
+        return true;
+      }
+
+      case '/history':
+        pushNote(getHistoryText(sessionRef.current, 15));
+        return true;
+
+      case '/clear':
+        clearAllHistory();
+        sessionRef.current = createSession(sessionRef.current.model);
+        setHeaderSessionId(sessionRef.current.id);
+        pushNote('✓ All history cleared, new session started.');
+        return true;
+
+      case '/new':
+        sessionRef.current = createSession(sessionRef.current.model);
+        setHeaderSessionId(sessionRef.current.id);
+        pushNote('✓ New session started.');
+        return true;
+
+      case '/model': {
+        if (args) {
+          sessionRef.current.model = args;
+          saveSession(sessionRef.current);
+          setHeaderModel(args);
+          pushNote(`✓ Model changed to: ${args}`);
+        } else {
+          pushNote(`Current model: ${sessionRef.current.model} — usage: /model <name>`);
+        }
+        return true;
+      }
+
+      case '/memory': {
+        const facts = getAllFacts();
+        if (facts.length === 0) {
+          pushNote('Long-term memory is empty. Say "remember that ..." to store facts.');
+        } else {
+          const lines = facts.map((f) => `${f.key}${f.source === 'auto' ? ' [auto]' : ' [manual]'}: ${f.value}`);
+          pushNote(`Long-term memory (${facts.length} facts):\n${lines.join('\n')}`);
+        }
+        return true;
+      }
+
+      case '/remember': {
+        const spaceIdx = args.indexOf(' ');
+        if (!args || spaceIdx === -1) {
+          pushNote('Usage: /remember <key> <value>');
+        } else {
+          const key = args.slice(0, spaceIdx).trim();
+          const value = args.slice(spaceIdx + 1).trim();
+          rememberFact(key, value, 'manual');
+          refreshMemoryCount();
+          pushNote(`✓ Remembered ${key} = ${value}`);
+        }
+        return true;
+      }
+
+      case '/forget': {
+        if (!args) {
+          pushNote('Usage: /forget <key>');
+        } else if (forgetFact(args.trim())) {
+          refreshMemoryCount();
+          pushNote(`✓ Forgot: ${args.trim()}`);
+        } else {
+          pushNote(`Key not found: ${args.trim()}`);
+        }
+        return true;
+      }
+
+      default:
+        pushNote(`Unknown command: ${cmd} — type /help`);
+        return true;
+    }
+  };
+
+  const handleSubmit = (value: string) => {
+    if (busy) return;
+    if (value.startsWith('/')) {
+      handleSlash(value);
+      return;
+    }
+    void sendToAI(value);
+  };
+
+  // Ctrl+C handled by ink (exitOnCtrlC default)
+
+  return (
+    <Box flexDirection="column">
+      {/* Completed messages — rendered once into terminal scrollback */}
+      <Static items={display}>
+        {(item: DisplayItem, i: number) => (
+          <Box key={i} flexDirection="column" marginTop={1}>
+            {item.kind === 'user' && (
+              <Box>
+                <Text color="green" bold>{'You › '}</Text>
+                <Text color="white">{item.text}</Text>
+              </Box>
+            )}
+            {item.kind === 'assistant' && (
+              <Box flexDirection="column">
+                <Text color="cyan" bold>{'Octapus ›'}</Text>
+                <Text>{renderMarkdown(item.text)}</Text>
+              </Box>
+            )}
+            {item.kind === 'note' && (
+              <Box paddingLeft={2}>
+                <Text dim italic>{item.text}</Text>
+              </Box>
+            )}
+            {item.kind === 'error' && (
+              <Box paddingLeft={2}>
+                <Text color="red">{item.text}</Text>
+              </Box>
+            )}
+          </Box>
+        )}
+      </Static>
+
+      {/* Header */}
+      <Box borderStyle="round" borderColor="cyan" flexDirection="column" paddingX={1} marginTop={display.length === 0 ? 0 : 1}>
+        <Text>
+          <Text color="magenta" bold>🐙 Octapus</Text>
+          <Text dim> multi-provider AI CLI</Text>
+        </Text>
+        <Text dim>
+          model: <Text color="yellow">{headerModel}</Text>
+          {'  │  '}session: <Text color="yellow">{headerSessionId}</Text>
+          {'  │  '}memory: <Text color="yellow">{memoryCount}</Text> facts
+        </Text>
+        <Text dim>/help for commands</Text>
+      </Box>
+
+      {/* Streaming area */}
+      {(thinking || streaming !== null) && (
+        <Box flexDirection="column" marginTop={1} paddingLeft={2}>
+          {thinking && <Spinner label="Thinking..." />}
+          {streaming !== null && (
+            <Text>{renderMarkdown(streaming)}</Text>
+          )}
+        </Box>
+      )}
+
+      {/* Input */}
+      <Box marginTop={1}>
+        <TextInput
+          placeholder={busy ? '' : 'Type a message… (/help for commands)'}
+          disabled={busy}
+          history={inputHistory}
+          onSubmit={handleSubmit}
+        />
+      </Box>
+
+      {/* Status bar */}
+      <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
+        <Text dim>
+          <Text color="green">● </Text>
+          {lastProviderRef.current || 'ready'}
+          {'  │  '}
+          {headerModel}
+        </Text>
+        <Text dim>
+          {totals.tokensIn.toLocaleString()}→{totals.tokensOut.toLocaleString()} tok
+          {'  │  '}
+          <Text color={totals.cost === 0 ? 'green' : 'yellow'}>{formatCost(totals.cost)}</Text>
+        </Text>
+      </Box>
+    </Box>
+  );
+}
