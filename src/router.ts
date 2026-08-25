@@ -1,5 +1,6 @@
 import { Provider, Message, ChatOptions, RouterOptions, StreamEvent } from './providers';
 import { loadConfig } from './config';
+import { HealthRegistry, classifyFailure } from './health';
 import chalk from 'chalk';
 
 export interface ChatResult {
@@ -12,6 +13,7 @@ export class Router {
   private providers: Map<string, Provider> = new Map();
   private modelToProvider: Map<string, string> = new Map();
   private config = loadConfig();
+  private health = new HealthRegistry();
   
   // Track last used provider/model for stats
   public lastProvider: string = '';
@@ -68,7 +70,9 @@ export class Router {
       }
     }
 
-    // Remaining enabled providers: role-matched first (domain routing), then priority
+    // Remaining enabled providers: role-matched first (domain routing), then
+    // healthy-first, then priority. Unhealthy entries stay in the chain as
+    // last-resort (never dropped — "all open" edge case must still attempt).
     const roleMatches = (p: Provider): number => {
       if (!domain) return 0;
       const role = this.config.providers[p.name]?.role;
@@ -77,6 +81,11 @@ export class Router {
       if (domain === 'security' && role === 'security') return 1;
       if (domain === 'general' && role === 'general') return 1;
       return 0;
+    };
+
+    const healthRank = (p: Provider): number => {
+      const st = this.health.getState(p.name);
+      return st.usable ? (st.probing ? 0 : 2) : -1; // healthy > probing > open
     };
 
     const remaining = Array.from(this.providers.values())
@@ -88,11 +97,19 @@ export class Router {
       .sort((a, b) => {
         const ra = roleMatches(a), rb = roleMatches(b);
         if (ra !== rb) return rb - ra;           // specialists first
+        const ha = healthRank(a), hb = healthRank(b);
+        if (ha !== hb) return hb - ha;           // then healthy first
         return b.priority - a.priority;          // then priority
       });
 
     for (const provider of remaining) {
-      chain.push({ provider, modelToUse: provider.models[0] });
+      // Skip models known-dead (recently 404'd) — use first alive model
+      let modelToUse = provider.models.includes(provider.models[0])
+        ? provider.models[0]
+        : provider.models[0];
+      const alive = provider.models.find(m => !this.health.isModelDead(provider.name, m));
+      modelToUse = alive || provider.models[0];
+      chain.push({ provider, modelToUse });
     }
 
     return chain;
@@ -110,6 +127,16 @@ export class Router {
     let lastError: Error | null = null;
 
     for (const { provider, modelToUse } of chain) {
+      // Circuit breaker guard — skip providers that are open (quota/auth/outage)
+      const st = this.health.getState(provider.name);
+      if (!st.usable) {
+        if (!quiet) {
+          const waitMin = st.waitMsLeft ? ` (retry in ~${Math.ceil(st.waitMsLeft / 60000)}m)` : '';
+          console.log(chalk.gray(`  ⏭ ${provider.name}: circuit open — ${st.reason}${waitMin}`));
+        }
+        continue;
+      }
+
       try {
         // Track which provider/model we're using
         this.lastProvider = provider.name;
@@ -124,8 +151,14 @@ export class Router {
           ...chatOptions,
           model: modelToUse
         });
+        if (!chatOptions?.signal?.aborted) this.health.recordSuccess(provider.name);
         return; // Success
       } catch (err) {
+        // User abort is not a provider failure
+        if (chatOptions?.signal?.aborted) continue;
+        const cls = classifyFailure(err);
+        this.health.recordFailure(provider.name, cls);
+        if (cls.kind === 'model_dead') this.health.markModelDead(provider.name, modelToUse);
         lastError = err as Error;
         if (!quiet) {
           // One clean dim line — never dump raw provider JSON (may contain

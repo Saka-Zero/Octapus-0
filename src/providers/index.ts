@@ -26,7 +26,8 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
   { name: 'cerebras', baseURL: 'https://api.cerebras.ai/v1', priority: 9, needsKey: true,
     models: ['llama3.1-70b', 'llama3.1-8b'] },
   { name: 'gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', priority: 8, needsKey: true,
-    models: ['gemini-3.6-flash', 'gemini-3.6-pro', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemma-3-27b-it', 'gemma-3-12b-it'] },
+    // Live-probed 2026-08: older 2.x/3.x ids retired from the endpoint
+    models: ['gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemma-4-31b-it'] },
   { name: 'sambanova', baseURL: 'https://api.sambanova.ai/v1', priority: 7, needsKey: true,
     models: ['Meta-Llama-3.1-70B-Instruct', 'Meta-Llama-3.1-8B-Instruct'] },
   { name: 'ollama', baseURL: 'http://localhost:11434/v1', priority: 7, needsKey: false, models: [] },
@@ -45,7 +46,8 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
       'meta-llama/Llama-3.1-8B-Instruct-Turbo', 'meta-llama/Llama-3.1-70B-Instruct-Turbo',
       'mistralai/Mixtral-8x7B-Instruct-v0.1', 'google/gemma-2-9b-it', 'Qwen/Qwen2.5-72B-Instruct-Turbo'] },
   { name: 'openrouter', baseURL: 'https://openrouter.ai/api/v1', priority: 3, needsKey: true,
-    models: ['meta-llama/llama-4-scout:free', 'google/gemma-3-27b-it:free', 'deepseek/deepseek-chat-v3-0324:free', 'qwen/qwen3-235b-a22b:free', 'microsoft/mai-ds-r1:free'],
+    // Live-probed 2026-08: previous :free defaults retired to paid
+    models: ['z-ai/glm-5.2:free', 'google/gemma-4-31b-it:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'minimax/minimax-m3:free'],
     note: 'Requires HTTP-Referer header' },
   { name: 'zhipu', baseURL: 'https://open.bigmodel.cn/api/paas/v4', priority: 3, needsKey: true,
     models: ['glm-4-flash', 'glm-4-plus', 'glm-4-air', 'codegeex-4'] },
@@ -78,10 +80,11 @@ export const BUILTIN_PROVIDERS: BuiltinProviderDef[] = [
     models: ['openai', 'openai-fast'] },
   // OpenCode Zen — official "use with any agent" gateway. Free models below;
   // key comes from `opencode auth login` (auto-imported) or OPENCODE_API_KEY.
+  // Live-probed 2026-08: minimax-m3-free/qwen3.6-plus-free vanished (401),
+  // deepseek-v4-flash-free/nemotron-3-ultra-free upstream-broken (400).
   { name: 'opencode-zen', baseURL: 'https://opencode.ai/zen/v1', priority: 6, needsKey: true,
-    models: ['deepseek-v4-flash-free', 'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free',
-      'minimax-m3-free' as string, 'mimo-v2.5-free', 'hy3-free', 'laguna-s-2.1-free',
-      'x-preview-f-free', 'big-pickle'].filter(Boolean) },
+    models: ['x-preview-f-free', 'mimo-v2.5-free', 'hy3-free', 'big-pickle',
+      'laguna-s-2.1-free', 'nemotron-3.5-lightning-free'] },
   // LLM7 — anonymous tier works with literal "unused" token (verified live).
   // Anonymous limits: ~1 req/s, premium models need a real key from dash.llm7.io.
   { name: 'llm7', baseURL: 'https://api.llm7.io/v1', priority: 5, needsKey: false,

@@ -7,6 +7,19 @@ interface DeltaToolCall {
   function?: { name?: string; arguments?: string };
 }
 
+/** Structured HTTP error so the circuit breaker can classify failures */
+export class ProviderHttpError extends Error {
+  constructor(
+    public providerName: string,
+    public status: number,
+    public retryAfterMs: number | undefined,
+    body?: string
+  ) {
+    super(`${providerName} API error (${status}): ${body?.slice(0, 500)}`);
+    this.name = 'ProviderHttpError';
+  }
+}
+
 /**
  * Core OpenAI-compatible streaming engine.
  * Handles SSE parsing, text deltas, and incremental tool_call assembly.
@@ -64,8 +77,15 @@ export async function* streamOpenAI(opts: {
   });
 
   if (!res.ok || !res.body) {
-    const err = await res.text().catch(() => res.statusText);
-    throw new Error(`${providerName} API error (${res.status}): ${err.slice(0, 500)}`);
+    const errText = await res.text().catch(() => res.statusText);
+    const ra = res.headers.get('retry-after');
+    let retryAfterMs: number | undefined;
+    if (ra) {
+      retryAfterMs = /^\d+$/.test(ra.trim())
+        ? parseInt(ra, 10) * 1000
+        : Math.max(0, Date.parse(ra) - Date.now()) || undefined;
+    }
+    throw new ProviderHttpError(providerName, res.status, retryAfterMs, errText);
   }
 
   const reader = res.body.getReader();
@@ -101,7 +121,8 @@ export async function* streamOpenAI(opts: {
         }
         // Some providers send errors with HTTP 200 — surface them
         if (parsed.error) {
-          throw new Error(`${providerName} stream error: ${JSON.stringify(parsed.error).slice(0, 300)}`);
+          const code = parsed.error?.code === 429 || parsed.error?.status === 'RESOURCE_EXHAUSTED' ? 429 : 0;
+          throw new ProviderHttpError(providerName, code, undefined, JSON.stringify(parsed.error).slice(0, 300));
         }
         const delta = parsed.choices?.[0]?.delta;
         if (!delta) continue;
