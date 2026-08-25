@@ -22,10 +22,14 @@ export function formatTokens(input: number, output: number): string {
 export function estimateCost(provider: string, inputTokens: number, outputTokens: number): number {
   const rates: Record<string, { input: number; output: number }> = {
     groq: { input: 0, output: 0 }, // Free tier
+    cerebras: { input: 0, output: 0 }, // Free tier
     gemini: { input: 0, output: 0 }, // Free tier
+    sambanova: { input: 0, output: 0 }, // Free tier
     ollama: { input: 0, output: 0 }, // Local
-    openrouter: { input: 0.0001, output: 0.0003 }, // Varies by model
-    requesty: { input: 0.0001, output: 0.0003 }
+    together: { input: 0.0001, output: 0.0003 },
+    openrouter: { input: 0.00015, output: 0.0006 },
+    novita: { input: 0.0001, output: 0.0003 },
+    requesty: { input: 0.00015, output: 0.0006 }
   };
   
   const rate = rates[provider] || { input: 0, output: 0 };

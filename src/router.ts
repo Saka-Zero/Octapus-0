@@ -15,6 +15,10 @@ export class Router {
     }
   }
 
+  getProvider(name: string): Provider | undefined {
+    return this.providers.get(name);
+  }
+
   getProviderForModel(model: string): Provider | undefined {
     const providerName = this.modelToProvider.get(model);
     if (providerName) return this.providers.get(providerName);
@@ -68,6 +72,11 @@ export class Router {
 
     for (const provider of chain) {
       try {
+        // Skip providers with no models available
+        if (provider.models.length === 0) {
+          lastError = new Error(`${provider.name} has no models available`);
+          continue;
+        }
         // Check if provider supports the model
         const modelToUse = provider.models.includes(model) ? model : provider.models[0];
         

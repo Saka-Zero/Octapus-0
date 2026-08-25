@@ -1,21 +1,17 @@
 import { Provider, Message, ChatOptions } from './base';
 
-export class RequestyProvider implements Provider {
-  name = 'requesty';
-  models = [
-    'meta-llama/llama-4-scout:free',
-    'google/gemma-3-27b-it:free',
-    'deepseek/deepseek-chat-v3-0324:free',
-    'qwen/qwen3-235b-a22b:free',
-    'microsoft/mai-ds-r1:free'
-  ];
-  priority = 2;
+export class OpenAICompatibleProvider implements Provider {
+  name: string;
+  models: string[] = [];
+  priority: number;
   private apiKey: string;
-  private baseURL = 'https://router.requesty.ai/v1';
+  private baseURL: string;
 
-  constructor(apiKey: string, baseURL?: string) {
+  constructor(name: string, apiKey: string, baseURL: string, priority = 1) {
+    this.name = name;
     this.apiKey = apiKey;
-    if (baseURL) this.baseURL = baseURL;
+    this.baseURL = baseURL;
+    this.priority = priority;
   }
 
   async validateKey(): Promise<boolean> {
@@ -48,10 +44,7 @@ export class RequestyProvider implements Provider {
       model: options.model,
       messages: messages.map(m => ({
         role: m.role,
-        content: m.content,
-        tool_calls: m.tool_calls,
-        tool_call_id: m.tool_call_id,
-        name: m.name
+        content: m.content
       })),
       temperature: options.temperature ?? 0.7,
       max_tokens: options.maxTokens ?? 4096,
@@ -71,7 +64,7 @@ export class RequestyProvider implements Provider {
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Requesty API error (${res.status}): ${err}`);
+      throw new Error(`${this.name} API error (${res.status}): ${err}`);
     }
 
     const reader = res.body?.getReader();

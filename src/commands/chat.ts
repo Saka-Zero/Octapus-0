@@ -64,6 +64,21 @@ export function createChatCommand(router: Router): Command {
       }
 
       const model = options.model || config.defaultModel;
+      
+      // Validate temperature and maxTokens
+      if (options.temperature !== undefined) {
+        if (options.temperature < 0 || options.temperature > 2) {
+          console.log(chalk.red('Temperature must be between 0 and 2'));
+          process.exit(1);
+        }
+      }
+      if (options.maxTokens !== undefined) {
+        if (options.maxTokens < 1 || options.maxTokens > 1000000) {
+          console.log(chalk.red('Max tokens must be between 1 and 1000000'));
+          process.exit(1);
+        }
+      }
+
       const spinner = createSpinner({ text: `Connecting to ${model}...` });
       
       const messages: Message[] = [];
@@ -83,6 +98,7 @@ export function createChatCommand(router: Router): Command {
         spinner.start();
         
         const fallbackModels = options.fallback ? config.fallbackModels : [];
+        let spinnerStopped = false;
         
         for await (const chunk of router.chat({
           model,
@@ -95,11 +111,10 @@ export function createChatCommand(router: Router): Command {
           },
           fallbackModels
         })) {
-          if (!providerUsed) {
-            // We can't easily know which provider succeeded without modifying router
-            // For now, we'll track after first chunk
+          if (!spinnerStopped) {
+            spinner.stop();
+            spinnerStopped = true;
           }
-          spinner.stop();
           process.stdout.write(chalk.green(chunk));
           fullResponse += chunk;
         }

@@ -2,7 +2,13 @@ import { Provider, Message, ChatOptions } from './base';
 
 export class OpenRouterProvider implements Provider {
   name = 'openrouter';
-  models: string[] = [];
+  models = [
+    'meta-llama/llama-4-scout:free',
+    'google/gemma-3-27b-it:free',
+    'deepseek/deepseek-chat-v3-0324:free',
+    'qwen/qwen3-235b-a22b:free',
+    'microsoft/mai-ds-r1:free'
+  ];
   priority = 3;
   private apiKey: string;
   private baseURL = 'https://openrouter.ai/api/v1';

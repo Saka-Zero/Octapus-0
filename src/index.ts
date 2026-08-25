@@ -67,6 +67,16 @@ function registerProviders(): void {
   if (config.providers.requesty?.enabled && config.providers.requesty.apiKey) {
     router.register(new RequestyProvider(config.providers.requesty.apiKey, config.providers.requesty.baseURL));
   }
+
+  // Register any custom providers (added via `provider add`)
+  const knownProviders = ['groq', 'cerebras', 'gemini', 'sambanova', 'ollama', 'together', 'openrouter', 'novita', 'requesty'];
+  for (const [name, cfg] of Object.entries(config.providers)) {
+    if (knownProviders.includes(name)) continue;
+    if (!cfg?.enabled || !cfg.apiKey || !cfg.baseURL) continue;
+    // Create a generic OpenAI-compatible provider
+    const { OpenAICompatibleProvider } = require('./providers/openai-compatible');
+    router.register(new OpenAICompatibleProvider(name, cfg.apiKey, cfg.baseURL, cfg.priority ?? 1));
+  }
 }
 
 registerProviders();
@@ -103,23 +113,6 @@ program
   .hook('preAction', (thisCommand, actionCommand) => {
     if (thisCommand.opts().noColor) {
       chalk.level = 0;
-    }
-  });
-
-// Default command: chat
-program
-  .command('*', { hidden: true, noHelp: true })
-  .description('Chat with default model (default command)')
-  .argument('[prompt...]', 'Prompt')
-  .action((prompt) => {
-    if (prompt.length === 0) {
-      program.help();
-      return;
-    }
-    // Delegate to chat command
-    const chatCmd = program.commands.find(c => c.name() === 'chat');
-    if (chatCmd) {
-      chatCmd.parse(['chat', prompt.join(' ')], { from: 'user' });
     }
   });
 

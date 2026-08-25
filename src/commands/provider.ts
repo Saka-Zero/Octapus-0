@@ -65,9 +65,9 @@ function createTestCommand(router: Router): Command {
       console.log();
 
       for (const pName of providersToTest) {
-        const provider = router.getProviderForModel(config.providers[pName]?.models?.[0] || '');
+        const provider = router.getProvider(pName);
         if (!provider) {
-          console.log(chalk.gray(`  ${pName}: Not registered`));
+          console.log(chalk.gray(`  ${pName}: Not registered (missing from config or not enabled)`));
           continue;
         }
 

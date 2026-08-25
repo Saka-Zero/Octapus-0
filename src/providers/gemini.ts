@@ -39,15 +39,22 @@ export class GeminiProvider implements Provider {
   }
 
   private convertMessages(messages: Message[]) {
-    return messages.map(m => ({
-      role: m.role === 'assistant' ? 'model' : m.role === 'system' ? 'user' : m.role,
-      parts: [{ text: m.content }]
-    }));
+    // Extract system message for systemInstruction
+    const systemMsg = messages.find(m => m.role === 'system');
+    const nonSystem = messages.filter(m => m.role !== 'system');
+    return {
+      contents: nonSystem.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }]
+      })),
+      systemInstruction: systemMsg ? { parts: [{ text: systemMsg.content }] } : undefined
+    };
   }
 
   async *chat(messages: Message[], options: ChatOptions): AsyncIterable<string> {
-    const body = {
-      contents: this.convertMessages(messages),
+    const converted = this.convertMessages(messages);
+    const body: any = {
+      contents: converted.contents,
       generationConfig: {
         temperature: options.temperature ?? 0.7,
         maxOutputTokens: options.maxTokens ?? 4096,
@@ -61,6 +68,9 @@ export class GeminiProvider implements Provider {
         { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
       ]
     };
+    if (converted.systemInstruction) {
+      body.systemInstruction = converted.systemInstruction;
+    }
 
     const url = `${this.baseURL}/models/${options.model}:streamGenerateContent?key=${this.apiKey}&alt=sse`;
     
