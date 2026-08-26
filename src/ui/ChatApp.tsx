@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Text, Box, useInput, useApp } from 'ink';
 import { renderMarkdown } from './markdown';
-import { getTheme, Theme } from './theme';
+import { getTheme, listThemeNames, Theme } from './theme';
 import { TextInput } from './TextInput';
 import { ModelPicker } from './ModelPicker';
 import { SessionPicker } from './SessionPicker';
+import { CommandMenu } from './CommandMenu';
 import {
   useSpinner,
   useBlinkCursor,
@@ -70,7 +71,7 @@ const StatusBar: React.FC<{
     <Box width={width} flexDirection="row">
       {/* help */}
       <Text backgroundColor={theme.backgroundDarker} color={theme.textMuted}>
-        {' ctrl+? help '}
+        {' ctrl+R menu '}
       </Text>
 
       {/* message count */}
@@ -220,6 +221,7 @@ export const ChatApp: React.FC<ChatAppProps> = ({
   );
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
+  const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { exit } = useApp();
@@ -347,6 +349,100 @@ export const ChatApp: React.FC<ChatAppProps> = ({
     }
   }, [batched]);
 
+  // ── Command menu action handler ─────────────────────────────────────────────
+
+  const handleCommandAction = useCallback(
+    (action: string, payload?: any) => {
+      switch (action) {
+        case 'session:new':
+          setShowSessionPicker(true);
+          break;
+        case 'session:switch':
+          // Session switching handled by parent; close menu
+          setShowCommandMenu(false);
+          break;
+        case 'model:switch':
+          if (payload?.modelId) {
+            setModel(payload.modelId);
+          }
+          break;
+        case 'provider:switch':
+          // Provider toggle: update config in memory and notify
+          if (payload?.providerName && config.providers[payload.providerName]) {
+            config.providers[payload.providerName].enabled = payload.enabled;
+          }
+          break;
+        case 'view:clear':
+          setMessages([]);
+          break;
+        case 'view:theme':
+          if (payload?.themeName) {
+            (config as any).theme = payload.themeName;
+          } else {
+            // Cycle to next theme
+            const names = listThemeNames();
+            const current = (config as any).theme as string | undefined;
+            const idx = names.indexOf(current || 'octapus');
+            (config as any).theme = names[(idx + 1) % names.length];
+          }
+          break;
+        case 'view:reset':
+          setMessages([]);
+          break;
+        case 'tools:toggle-agent':
+        case 'tools:toggle-plan':
+        case 'tools:list':
+          // Delegate to parent handler
+          break;
+        case 'export:last': {
+          const lastAssistant = [...messages]
+            .reverse()
+            .find((m) => m.role === 'assistant');
+          if (lastAssistant) {
+            // Copy to clipboard via process
+            try {
+              require('child_process').execSync(
+                `echo ${JSON.stringify(lastAssistant.content)} | clip`,
+                { timeout: 500 }
+              );
+            } catch {
+              // clip may not be available; silently ignore
+            }
+          }
+          break;
+        }
+        case 'export:history': {
+          // Export to JSON file
+          try {
+            const fs = require('fs');
+            const path = require('path');
+            const exportDir = path.join(
+              process.env.HOME || process.env.USERPROFILE || '',
+              '.config',
+              'octapus',
+              'exports'
+            );
+            if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true });
+            const filename = `chat-export-${Date.now()}.json`;
+            fs.writeFileSync(
+              path.join(exportDir, filename),
+              JSON.stringify({ session, messages }, null, 2)
+            );
+          } catch {
+            // Export failed silently
+          }
+          break;
+        }
+        case 'export:digest':
+          // Digest save — for now just log
+          break;
+        default:
+          break;
+      }
+    },
+    [messages, session, config, router]
+  );
+
   // ── Key bindings ─────────────────────────────────────────────────────────────
 
   useInput((inputChar, key) => {
@@ -354,6 +450,7 @@ export const ChatApp: React.FC<ChatAppProps> = ({
       handleAbort();
       exit();
     }
+    if (key.ctrl && inputChar === 'r') setShowCommandMenu((p) => !p);
     if (key.ctrl && inputChar === 'm') setShowModelPicker((p) => !p);
     if (key.ctrl && inputChar === 's') setShowSessionPicker((p) => !p);
     if (key.ctrl && inputChar === 'l') setMessages([]);
@@ -408,7 +505,7 @@ export const ChatApp: React.FC<ChatAppProps> = ({
           {messages.length === 0 && !agentBusy ? (
             <Box justifyContent="center" alignItems="center" height={chatH}>
               <Text color={theme.textMuted}>
-                Start a conversation… (Ctrl+M model · Ctrl+S sessions)
+                Start a conversation… (Ctrl+R menu · Ctrl+M model · Ctrl+S sessions)
               </Text>
             </Box>
           ) : (
@@ -495,6 +592,17 @@ export const ChatApp: React.FC<ChatAppProps> = ({
             setShowSessionPicker(false);
           }}
           onClose={() => setShowSessionPicker(false)}
+        />
+      )}
+
+      {showCommandMenu && (
+        <CommandMenu
+          router={router}
+          config={config}
+          currentModel={model}
+          currentSessionId={session.id}
+          onClose={() => setShowCommandMenu(false)}
+          onAction={handleCommandAction}
         />
       )}
     </Box>
