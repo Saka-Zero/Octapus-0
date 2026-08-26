@@ -14,7 +14,7 @@ import { runAgentTurn } from '../agent';
 import { setPlanMode, isPlanMode } from '../tools';
 import { listCheckpoints, restoreCheckpoint } from '../checkpoints';
 import { mcpManager } from '../mcp';
-import { getTheme, listThemeNames } from './theme';
+import { getTheme, listThemeNames, Theme } from './theme';
 import { execSync } from 'child_process';
 import { classifyIntent, domainLabel, DOMAIN_PERSONAS, Domain } from '../utils/roles';
 import { runCouncil } from '../council';
@@ -25,6 +25,7 @@ import { listCustomAgents, getCustomAgent, CustomAgent } from '../utils/customAg
 import { loadCustomCommands, expandCommand } from '../utils/customCommands';
 import { loadPlugins, pluginSystemPrompt, getPluginCount } from '../plugins';
 
+// ─── Display types ───────────────────────────────────────────────────
 interface ChatAppProps {
   router: Router;
   session: ConversationSession;
@@ -40,6 +41,11 @@ type DisplayItem =
   | { kind: 'diff'; title: string; lines: string[] }
   | { kind: 'tool'; glyph: string; verb: string; args: string; detail?: string };
 
+// ─── OpenCode-style thick left border character ──────────────────────
+// OpenCode: border.Left = true + ThickBorder() → thick "┃" on all messages
+const BORDER_CHAR = '┃';
+
+// ─── Spinner ─────────────────────────────────────────────────────────
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 function Spinner({ label, color }: { label: string; color: string }) {
@@ -56,25 +62,32 @@ function Spinner({ label, color }: { label: string; color: string }) {
   );
 }
 
-function ApprovalPrompt({ tool, summary, onDecision }: { tool: string; summary: string; onDecision: (ok: boolean) => void }) {
+// ─── Approval prompt ─────────────────────────────────────────────────
+function ApprovalPrompt({ tool, summary, theme, onDecision }: { tool: string; summary: string; theme: Theme; onDecision: (ok: boolean) => void }) {
   useInput((input, key) => {
     const lower = (input || '').toLowerCase();
     if (lower === 'y' || key.return) onDecision(true);
     else if (lower === 'n' || key.escape) onDecision(false);
   });
   return (
-    <Box borderStyle="round" borderColor="yellow" flexDirection="column" paddingX={1} marginTop={1}>
-      <Text color="yellow" bold>⚠ Approval needed</Text>
+    <Box
+      borderStyle="round"
+      borderColor={theme.warning}
+      flexDirection="column"
+      paddingX={1}
+      marginTop={1}
+    >
+      <Text color={theme.warning} bold>⚠ Approval needed</Text>
       <Text>{tool}: </Text>
-      <Text color="cyan">{summary}</Text>
+      <Text color={theme.info}>{summary}</Text>
       <Text dim>y = allow · n = deny</Text>
     </Box>
   );
 }
 
+// ─── System prompt builder ───────────────────────────────────────────
 function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: string, persona?: string, agentPrompt?: string): string {
   const parts: string[] = [];
-  // Custom agent persona takes precedence over the default genius prompt
   parts.push(agentPrompt || userSystem || config.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
   const projectCtx = formatProjectContext();
   if (projectCtx) parts.push(projectCtx);
@@ -92,6 +105,7 @@ function buildSystemPrompt(config: any, userSystem?: string, activeSkillText?: s
   return parts.join('\n\n');
 }
 
+// ─── Rolling digest updater ──────────────────────────────────────────
 async function updateDigest(router: Router, session: ConversationSession, config: any): Promise<void> {
   try {
     const overflow = getOverflowMessages(session);
@@ -131,6 +145,9 @@ async function updateDigest(router: Router, session: ConversationSession, config
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════
+// Main ChatApp component
+// ═════════════════════════════════════════════════════════════════════
 export function ChatApp({ router, session: initialSession, config, options }: ChatAppProps) {
   const { exit } = useApp();
   const [themeName, setThemeName] = useState<string>(config.settings.theme || 'octapus');
@@ -143,7 +160,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
-  // Council is the DEFAULT experience: every prompt = all specialists deliberate
   const [councilMode, setCouncilMode] = useState(config.settings.councilMode !== false);
   const [pendingApproval, setPendingApproval] = useState<{ tool: string; summary: string; resolve: (ok: boolean) => void } | null>(null);
   const [activeAgent, setActiveAgent] = useState<CustomAgent | null>(null);
@@ -195,7 +211,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     if (matched.length > 0) pushNote(`⚡ Skills: ${matched.map((s) => s.name).join(', ')}`);
     const skillText = formatSkillsForPrompt(matched);
 
-    // Classify intent → route to the right specialist
     const domain: Domain = classifyIntent(prompt);
     pushNote(`🎯 ${domainLabel(domain)}`);
 
@@ -265,7 +280,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
               setDisplay((d) => [...d, { kind: 'error', text: `✗ ${name} — ${output.slice(0, 200)}` }]);
               return;
             }
-            // OpenCode-style single-line tool rows: glyph + verb + args (+ dim detail)
             let parsedArgs: any = {};
             try { parsedArgs = JSON.parse(lastToolArgsRef.current || '{}'); } catch {}
             const map: Record<string, { glyph: string; verb: string; args: string; detail?: string }> = {
@@ -303,7 +317,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         });
         streamText = result.finalText || streamText;
       } else if (councilMode) {
-        // 🏛️ COUNCIL — multi-AI deliberation
         setThinking(false);
         const result = await runCouncil(router, prompt, messages, config, { ...options, signal: controller.signal }, {
           onPhase: (phase) => pushNote(phase),
@@ -324,7 +337,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         const tOut = estimateTokens(streamText);
         setTotals((t) => ({ tokensIn: t.tokensIn + Math.round(tIn), tokensOut: t.tokensOut + Math.round(tOut), cost: t.cost }));
         void updateDigest(router, sessionRef.current, config);
-        return; // council handles its own persistence — skip normal path
+        return;
       } else {
         for await (const ev of router.chat({
           model,
@@ -379,7 +392,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       setStreaming(null);
       setThinking(false);
       setBusy(false);
-      // Drain queued messages
       if (queueRef.current.length > 0) {
         const next = queueRef.current.shift()!;
         setTimeout(() => void sendToAI(next), 30);
@@ -494,7 +506,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         const next = !agentMode;
         setAgentMode(next);
         if (next && councilMode) {
-          // Mutually exclusive — agent wins, council disabled explicitly
           setCouncilMode(false);
           config.settings.councilMode = false;
           saveConfig(config);
@@ -641,7 +652,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
               if (ev.type === 'text') summary += ev.text;
             }
             if (summary.trim().length > 50) {
-              // Reconcile instead of replace: keep messages that arrived DURING compaction
               const cur = sessionRef.current;
               const snapshotSet = new Set(snapshotMsgs);
               const arrivedDuring = cur.messages.filter((m) => !snapshotSet.has(m));
@@ -701,7 +711,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         pushNote('Restoring…');
         void (async () => {
           const cps = await listCheckpoints(sessionRef.current.id, process.cwd());
-          // Displayed newest-first: [1] = newest
           const target = cps[cps.length - num];
           if (!target) { pushNote(`Checkpoint #${num} not found.`); return; }
           const r = await restoreCheckpoint(sessionRef.current.id, process.cwd(), target.hash);
@@ -765,7 +774,6 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
       }
 
       default: {
-        // Custom commands from ~/.config/octapus/commands/*.md
         const cmdName = cmd.slice(1);
         const custom = loadCustomCommands().find((c) => c.name === cmdName);
         if (custom) {
@@ -790,66 +798,105 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     void sendToAI(value);
   };
 
+  // ─── Layout helpers ───────────────────────────────────────────────
+
+  /**
+   * Render a single display item with OpenCode's left-border style.
+   * OpenCode: BorderLeft(true) + ThickBorder() → thick "┃" colored by role.
+   *   user     → theme.secondary (faint)
+   *   assistant → theme.primary (faint)
+   *   tool     → theme.accent (faint)
+   *   error    → theme.error
+   */
+  function renderItem(item: DisplayItem, i: number) {
+    switch (item.kind) {
+      case 'user':
+        return (
+          <Box key={i} flexDirection="row" marginTop={0}>
+            <Text color={theme.secondary}> {BORDER_CHAR} </Text>
+            <Box flexDirection="column" flexShrink={1}>
+              {item.text.split('\n').map((line, li) => (
+                <Text key={li} color={theme.text}>{line}</Text>
+              ))}
+            </Box>
+          </Box>
+        );
+
+      case 'assistant':
+        return (
+          <Box key={i} flexDirection="row" marginTop={0}>
+            <Text color={theme.primary}> {BORDER_CHAR} </Text>
+            <Box flexDirection="column" flexShrink={1}>
+              {renderMarkdown(item.text, { theme })}
+            </Box>
+          </Box>
+        );
+
+      case 'note':
+        return (
+          <Box key={i} flexDirection="row" marginTop={0}>
+            <Text color={theme.textMuted}>   </Text>
+            <Text color={theme.textMuted} italic>{item.text}</Text>
+          </Box>
+        );
+
+      case 'error':
+        return (
+          <Box key={i} flexDirection="row" marginTop={0}>
+            <Text color={theme.error}> {BORDER_CHAR} </Text>
+            <Text color={theme.error}>{item.text}</Text>
+          </Box>
+        );
+
+      case 'tool':
+        return (
+          <Box key={i} flexDirection="row" marginTop={0}>
+            <Text color={theme.accent}> {BORDER_CHAR} </Text>
+            <Text>
+              <Text color={theme.accent}>{item.glyph} </Text>
+              <Text bold>{item.verb} </Text>
+              <Text color={theme.text}>{item.args}</Text>
+              {item.detail && <Text color={theme.textMuted}>{'  ' + item.detail}</Text>}
+            </Text>
+          </Box>
+        );
+
+      case 'diff':
+        return (
+          <Box key={i} flexDirection="column" marginTop={0} paddingLeft={2}>
+            {item.lines.map((l, li) => (
+              <Text key={li} color={l.startsWith('+') ? theme.diffAdded : l.startsWith('-') ? theme.diffRemoved : theme.textMuted}>
+                {l}
+              </Text>
+            ))}
+          </Box>
+        );
+
+      default:
+        return null;
+    }
+  }
+
+  // ─── Render ───────────────────────────────────────────────────────
   return (
     <Box flexDirection="column">
+      {/* ─── Messages with left borders (OpenCode style) ─── */}
       <Static items={display}>
-        {(item: DisplayItem, i: number) => (
-          <Box key={i} flexDirection="column" marginTop={1} paddingLeft={2}>
-            {item.kind === 'user' && (
-              <Box flexDirection="column">
-                <Text color={theme.primary} bold>You</Text>
-                <Text color={theme.text}>{item.text}</Text>
-              </Box>
-            )}
-            {item.kind === 'assistant' && (
-              <Text>{renderMarkdown(item.text, { accent: theme.primary, muted: theme.borderActive })}</Text>
-            )}
-            {item.kind === 'note' && (
-              <Text color={theme.textMuted} italic>{item.text}</Text>
-            )}
-            {item.kind === 'error' && (
-              <Box flexDirection="column">
-                <Text color={theme.error}>{'│'}</Text>
-                <Text color={theme.error}>{'│  '}{item.text}</Text>
-                <Text color={theme.error}>{'│'}</Text>
-              </Box>
-            )}
-            {item.kind === 'tool' && (
-              <Box flexDirection="column">
-                <Text>
-                  <Text color={theme.accent}>{item.glyph + ' '}</Text>
-                  <Text bold>{item.verb + ' '}</Text>
-                  <Text color={theme.text}>{item.args}</Text>
-                  {item.detail && <Text color={theme.textMuted}>{'  ' + item.detail}</Text>}
-                </Text>
-              </Box>
-            )}
-            {item.kind === 'diff' && (
-              <Box flexDirection="column" paddingLeft={2}>
-                {item.lines.map((l, li) => (
-                  <Text key={li} color={l.startsWith('+') ? theme.diffAdded : l.startsWith('-') ? theme.diffRemoved : theme.textMuted}>
-                    {'  ' + l}
-                  </Text>
-                ))}
-              </Box>
-            )}
-          </Box>
-        )}
+        {(item: DisplayItem, i: number) => renderItem(item, i)}
       </Static>
 
-      {/* OpenCode-faithful: NO header. Metadata lives in the footer. */}
-
-      {/* Streaming */}
+      {/* ─── Streaming / thinking indicator ─── */}
       {(thinking || streaming !== null) && (
-        <Box flexDirection="column" marginTop={1} paddingLeft={2}>
-          {thinking && <Spinner label="thinking… (esc interrupts)" color={theme.accent} />}
-          {streaming !== null && (
-            <Text>{renderMarkdown(streaming, { accent: theme.primary, muted: theme.borderActive })}</Text>
-          )}
+        <Box flexDirection="row" marginTop={0}>
+          <Text color={theme.accent}> {BORDER_CHAR} </Text>
+          <Box flexDirection="column" flexShrink={1}>
+            {thinking && !streaming && <Spinner label="thinking… (esc to interrupt)" color={theme.accent} />}
+            {streaming !== null && renderMarkdown(streaming, { theme })}
+          </Box>
         </Box>
       )}
 
-      {/* Model picker */}
+      {/* ─── Model picker overlay ─── */}
       {pickerOpen && (
         <Box marginTop={1}>
           <ModelPicker
@@ -867,7 +914,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
-      {/* Session picker */}
+      {/* ─── Session picker overlay ─── */}
       {sessionPickerOpen && (
         <Box marginTop={1}>
           <SessionPicker
@@ -884,20 +931,21 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
-      {/* Approval */}
+      {/* ─── Approval prompt ─── */}
       {pendingApproval && (
         <ApprovalPrompt
           tool={pendingApproval.tool}
           summary={pendingApproval.summary}
+          theme={theme}
           onDecision={(ok) => { pendingApproval.resolve(ok); setPendingApproval(null); }}
         />
       )}
 
-      {/* Input — rounded bordered composer (OpenCode style) */}
+      {/* ─── Input — OpenCode: rounded border, primary color when focused ─── */}
       {!pickerOpen && !sessionPickerOpen && !pendingApproval && (
         <Box
           borderStyle="round"
-          borderColor={busy ? theme.border : theme.borderActive}
+          borderColor={busy ? theme.borderDim : theme.borderFocused}
           paddingX={1}
           marginTop={1}
         >
@@ -910,15 +958,15 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
-      {/* Footer line 1: model · modes · memory | tokens · cost (dim) */}
+      {/* ─── Status bar — OpenCode: width-aware, centered model · context · cost ─── */}
       <Box justifyContent="space-between" marginTop={0}>
         <Text color={theme.textMuted}>
           {headerModel}
           {agentMode ? ' · agent' : ''}
           {isPlanMode() ? ' · plan' : ''}
           {councilMode ? ' · council' : ''}
-          {'  ·  '}
-          mem {memoryCount} · prov {enabledCount}
+          {memoryCount > 0 ? ` · mem:${memoryCount}` : ''}
+          {enabledCount > 0 ? ` · prov:${enabledCount}` : ''}
         </Text>
         <Text color={theme.textMuted}>
           {new Intl.NumberFormat('en-US').format(totals.tokensIn)}→{new Intl.NumberFormat('en-US').format(totals.tokensOut)} tok ·{' '}
@@ -926,9 +974,9 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Text>
       </Box>
 
-      {/* Footer line 2: keybind hints (dimmest) */}
+      {/* ─── Keybind hints (OpenCode: dimmest, bottom) ─── */}
       <Text dimColor>
-        {'/help commands   /models picker   /agent tools   /council debate   esc interrupt'}
+        {'/help · /models · /agent · /council · /theme · esc interrupt'}
       </Text>
     </Box>
   );
