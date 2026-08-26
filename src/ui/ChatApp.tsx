@@ -25,31 +25,52 @@ interface ChatAppProps {
   options: any;
 }
 
-// ── Custom hook: terminal dimensions (ink 3 has no useStdinDimensions) ──────────
+// ── Terminal size hook (ink 3 has no useStdinDimensions) ────────────────────────
 
 function useTerminalSize() {
   const [size, setSize] = useState({
     columns: process.stdout.columns || 80,
     rows: process.stdout.rows || 24,
   });
-
   useEffect(() => {
-    const onResize = () => {
+    const onResize = () =>
       setSize({
         columns: process.stdout.columns || 80,
         rows: process.stdout.rows || 24,
       });
-    };
     process.stdout.on('resize', onResize);
-    return () => {
-      process.stdout.off('resize', onResize);
-    };
+    return () => { process.stdout.off('resize', onResize); };
   }, []);
-
   return size;
 }
 
-// ── Status Bar — OpenCode colored block layout ─────────────────────────────────
+// ── Animated spinner ───────────────────────────────────────────────────────────
+
+const SPIN_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+function useSpinner(active: boolean): string {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!active) { setFrame(0); return; }
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPIN_FRAMES.length), 80);
+    return () => clearInterval(id);
+  }, [active]);
+  return SPIN_FRAMES[frame];
+}
+
+// ── Blinking cursor for streaming ──────────────────────────────────────────────
+
+function useBlinkCursor(active: boolean): string {
+  const [on, setOn] = useState(true);
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setOn((v) => !v), 530);
+    return () => clearInterval(id);
+  }, [active]);
+  return active ? (on ? '▌' : ' ') : '';
+}
+
+// ── Status bar — single-line colored segments, no width math ───────────────────
 
 const StatusBar: React.FC<{
   theme: Theme;
@@ -59,110 +80,96 @@ const StatusBar: React.FC<{
   agentBusy: boolean;
   width: number;
 }> = ({ theme, model, tokenUsage, info, agentBusy, width }) => {
-  const helpText = 'ctrl+? help';
-  const tokenText = tokenUsage
-    ? `${tokenUsage.input} in / ${tokenUsage.output} out`
-    : '';
-  const modelText = model.length > 30 ? '...' + model.slice(-27) : model;
-  const statusText = agentBusy ? '● thinking...' : '';
+  const spin = useSpinner(agentBusy);
 
-  // OpenCode-style colored blocks
-  const helpW = helpText.length + 2;
-  const tokenW = tokenText ? tokenText.length + 2 : 0;
-  const modelW = modelText.length + 2;
-  const statusW = statusText ? statusText.length + 2 : 0;
-  const infoW = info
-    ? Math.min(info.length + 2, width - helpW - tokenW - modelW - statusW)
-    : 0;
-  const fillW = Math.max(0, width - helpW - tokenW - modelW - statusW - infoW);
+  // Shorten model name if too long
+  const modelLabel = model.length > 28 ? model.slice(0, 25) + '…' : model;
+  const tokenLabel = tokenUsage
+    ? `${tokenUsage.input.toLocaleString()} in · ${tokenUsage.output.toLocaleString()} out`
+    : null;
 
   return (
-    <Box width={width}>
-      <Box width={helpW} justifyContent="center">
-        <Text backgroundColor={theme.backgroundDarker} color={theme.textMuted}>
-          {helpText}
+    <Box width={width} flexDirection="row">
+      {/* help shortcut */}
+      <Text backgroundColor={theme.backgroundDarker} color={theme.textMuted}>
+        {' ctrl+? help '}
+      </Text>
+
+      {/* token counter — only when there's data */}
+      {tokenLabel && (
+        <Text
+          backgroundColor={
+            tokenUsage && tokenUsage.input > 100000
+              ? theme.warning
+              : theme.backgroundSecondary
+          }
+          color={tokenUsage && tokenUsage.input > 100000 ? theme.background : theme.text}
+        >
+          {' ' + tokenLabel + ' '}
         </Text>
-      </Box>
-
-      {tokenText.length > 0 && (
-        <Box width={tokenW} justifyContent="center">
-          <Text
-            backgroundColor={
-              tokenUsage && tokenUsage.input > 100000
-                ? theme.warning
-                : theme.backgroundSecondary
-            }
-            color={theme.background}
-          >
-            {tokenText}
-          </Text>
-        </Box>
       )}
 
-      {info && (
-        <Box width={infoW} justifyContent="center">
-          <Text backgroundColor={theme.primary} color={theme.background}>
-            {info}
-          </Text>
-        </Box>
-      )}
-
-      {statusText.length > 0 && (
-        <Box width={statusW} justifyContent="center">
-          <Text backgroundColor={theme.accent} color={theme.background}>
-            {statusText}
-          </Text>
-        </Box>
-      )}
-
-      <Box width={modelW} justifyContent="center">
-        <Text backgroundColor={theme.secondary} color={theme.background}>
-          {modelText}
+      {/* info / error line */}
+      {info && info.length > 0 && (
+        <Text backgroundColor={theme.error} color={theme.background}>
+          {' ' + info.slice(0, Math.max(0, width - 80)) + ' '}
         </Text>
-      </Box>
-
-      {fillW > 0 && (
-        <Box width={fillW}>
-          <Text> </Text>
-        </Box>
       )}
+
+      {/* thinking spinner */}
+      {agentBusy && (
+        <Text backgroundColor={theme.accent} color={theme.background}>
+          {' ' + spin + ' thinking… '}
+        </Text>
+      )}
+
+      {/* right-aligned model tag — pushed by remaining space via flex */}
+      <Text> </Text>
+      <Text backgroundColor={theme.secondary} color={theme.background} bold>
+        {' ' + modelLabel + ' '}
+      </Text>
     </Box>
   );
 };
 
-// ── Message Component ──────────────────────────────────────────────────────────
+// ── Message component with left border ─────────────────────────────────────────
 
 const MessageComponent: React.FC<{
   message: Message;
   theme: Theme;
   width: number;
-}> = ({ message, theme, width }) => {
+  streaming: boolean;
+}> = ({ message, theme, width, streaming }) => {
   const borderColors: Record<string, string> = {
     user: theme.secondary,
     assistant: theme.primary,
     system: theme.accent,
     tool: theme.accent,
   };
-  const borderChar = '┃';
   const color = borderColors[message.role] || theme.textMuted;
 
   const rendered = renderMarkdown(message.content, { theme });
 
+  // Hook must always be called — condition is inside
+  const cursor = useBlinkCursor(streaming);
+
   return (
     <Box width={width} flexDirection="row">
       <Box width={2} flexShrink={0}>
-        <Text color={color}>{borderChar} </Text>
+        <Text color={color}>┃ </Text>
       </Box>
-
       <Box flexDirection="column" width={width - 2}>
         <Text color={color} bold>
           {message.role === 'user'
             ? 'You'
-            : message.role === 'assistant'
-            ? message.model || 'Assistant'
-            : message.role}
+            : message.model
+            ? message.model
+            : message.role.charAt(0).toUpperCase() + message.role.slice(1)}
         </Text>
-        <Text wrap="wrap">{rendered}</Text>
+        <Text wrap="wrap">
+          {rendered}
+          {cursor ? <Text color={theme.accent}>{cursor}</Text> : null}
+        </Text>
       </Box>
     </Box>
   );
@@ -178,6 +185,7 @@ export const ChatApp: React.FC<ChatAppProps> = ({
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
+  const [streamingMsg, setStreamingMsg] = useState<number | null>(null);
   const [model, setModel] = useState(
     options?.model || config.defaultModel || 'gpt-4'
   );
@@ -188,37 +196,44 @@ export const ChatApp: React.FC<ChatAppProps> = ({
   const { exit } = useApp();
   const { columns: termWidth, rows: termHeight } = useTerminalSize();
 
-  // Read theme name from config if available
   const themeName = (config as any).theme as string | undefined;
   const theme = getTheme(themeName);
 
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  const scrollRef = useRef<number>(0);
 
   useEffect(() => {
     busyRef.current = agentBusy;
   }, [agentBusy]);
 
-  // Handle send — stream from router
+  // Auto-scroll: keep bottom visible
+  useEffect(() => {
+    scrollRef.current = messages.length;
+  }, [messages.length]);
+
+  // ── Send handler with streaming ──────────────────────────────────────────────
+
   const handleSend = useCallback(
     async (text: string) => {
       if (!text.trim() || busyRef.current) return;
 
-      const userMessage: Message = {
+      const userMsg: Message = {
         role: 'user',
         content: text.trim(),
         timestamp: Date.now(),
       };
 
-      setMessages((prev) => [...prev, userMessage]);
+      setMessages((prev) => [...prev, userMsg]);
       setAgentBusy(true);
+      setStreamingMsg(null);
       setError(null);
 
       const controller = new AbortController();
       abortRef.current = controller;
 
       try {
-        const messagesForProvider = [
+        const msgsForProvider = [
           ...messages.map((m) => ({
             role: m.role as 'user' | 'assistant' | 'system',
             content: m.content,
@@ -228,45 +243,46 @@ export const ChatApp: React.FC<ChatAppProps> = ({
 
         const chatGen = router.chat({
           model,
-          messages: messagesForProvider,
+          messages: msgsForProvider,
           options: { model, stream: true, quiet: true },
           fallbackModels: config.fallbackModels,
         });
 
-        let assistantContent = '';
+        let content = '';
         let firstChunk = true;
 
         for await (const event of chatGen) {
           if (controller.signal.aborted) break;
 
           if (event.type === 'text') {
-            assistantContent += event.text;
+            content += event.text;
+
             if (firstChunk) {
+              // Insert assistant message placeholder
+              const idx = messages.length + 1; // +1 for the user msg we just added
               setMessages((prev) => [
                 ...prev,
                 {
                   role: 'assistant',
-                  content: assistantContent,
+                  content,
                   model,
                   timestamp: Date.now(),
                 },
               ]);
+              setStreamingMsg(idx);
               firstChunk = false;
             } else {
+              // Update last message in place
               setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
                 if (last && last.role === 'assistant') {
-                  updated[updated.length - 1] = {
-                    ...last,
-                    content: assistantContent,
-                  };
+                  updated[updated.length - 1] = { ...last, content };
                 }
                 return updated;
               });
             }
           }
-          // tool_calls and usage events are ignored for now in TUI
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
@@ -274,6 +290,7 @@ export const ChatApp: React.FC<ChatAppProps> = ({
         }
       } finally {
         setAgentBusy(false);
+        setStreamingMsg(null);
         abortRef.current = null;
       }
     },
@@ -284,38 +301,35 @@ export const ChatApp: React.FC<ChatAppProps> = ({
     if (busyRef.current && abortRef.current) {
       abortRef.current.abort();
       setAgentBusy(false);
+      setStreamingMsg(null);
     }
   }, []);
 
-  // Key bindings
+  // ── Key bindings ─────────────────────────────────────────────────────────────
+
   useInput((inputChar, key) => {
     if (key.ctrl && inputChar === 'c') {
       handleAbort();
       exit();
     }
-    if (key.ctrl && inputChar === 'm') {
-      setShowModelPicker((prev) => !prev);
-    }
-    if (key.ctrl && inputChar === 's') {
-      setShowSessionPicker((prev) => !prev);
-    }
-    if (key.ctrl && inputChar === 'l') {
-      setMessages([]);
-    }
+    if (key.ctrl && inputChar === 'm') setShowModelPicker((p) => !p);
+    if (key.ctrl && inputChar === 's') setShowSessionPicker((p) => !p);
+    if (key.ctrl && inputChar === 'l') setMessages([]);
   });
 
-  // Layout (OpenCode split pane style)
-  const statusBarHeight = 1;
-  const headerHeight = 1;
-  const inputHeight = 3;
-  const chatHeight = termHeight - statusBarHeight - headerHeight - inputHeight;
+  // ── Layout ───────────────────────────────────────────────────────────────────
+
+  const statusBarH = 1;
+  const headerH = 1;
+  const inputH = 3;
+  const chatH = termHeight - statusBarH - headerH - inputH;
 
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
-      {/* ── Header — Logo + session + cwd ── */}
+      {/* ── Header ── */}
       <Box
         width={termWidth}
-        height={headerHeight}
+        height={headerH}
         justifyContent="center"
         borderStyle="single"
         borderBottom={true}
@@ -324,39 +338,25 @@ export const ChatApp: React.FC<ChatAppProps> = ({
         borderRight={false}
         borderColor={theme.borderDim}
       >
-        <Text color={theme.primary} bold>
-          {'⚙ '}
-        </Text>
-        <Text color={theme.secondary}>
-          {session.title || 'New Session'}
-        </Text>
-        <Text color={theme.textMuted}> │ </Text>
-        <Text color={theme.textMuted}>
-          {process.cwd()}
-        </Text>
+        <Text color={theme.primary} bold>{'⚙ '}</Text>
+        <Text color={theme.secondary}>{session.title || 'New Session'}</Text>
+        <Text color={theme.textMuted}>{' │ '}</Text>
+        <Text color={theme.textMuted}>{process.cwd()}</Text>
       </Box>
 
-      {/* ── Main content ── */}
-      <Box
-        flexDirection="column"
-        width={termWidth}
-        height={chatHeight + inputHeight}
-      >
+      {/* ── Chat area + Input ── */}
+      <Box flexDirection="column" width={termWidth} height={chatH + inputH}>
         {/* ── Messages viewport ── */}
         <Box
           flexDirection="column"
           width={termWidth}
-          height={chatHeight}
+          height={chatH}
           overflow="hidden"
         >
           {messages.length === 0 ? (
-            <Box
-              justifyContent="center"
-              alignItems="center"
-              height={chatHeight}
-            >
+            <Box justifyContent="center" alignItems="center" height={chatH}>
               <Text color={theme.textMuted}>
-                Start a conversation... (Ctrl+M to change model)
+                Start a conversation… (Ctrl+M model · Ctrl+S sessions)
               </Text>
             </Box>
           ) : (
@@ -366,28 +366,22 @@ export const ChatApp: React.FC<ChatAppProps> = ({
                 message={msg}
                 theme={theme}
                 width={termWidth}
+                streaming={streamingMsg === i}
               />
             ))
           )}
-
-          {agentBusy && (
-            <Box width={termWidth}>
-              <Text color={theme.accent}>{'● '}</Text>
-              <Text color={theme.textMuted}>thinking...</Text>
-            </Box>
-          )}
         </Box>
 
-        {error && (
+        {error && error.length > 0 && (
           <Box width={termWidth} paddingLeft={2}>
-            <Text color={theme.error}>✖ {error}</Text>
+            <Text color={theme.error}>{'✖ ' + error}</Text>
           </Box>
         )}
 
-        {/* ── Input area — bordered editor ── */}
+        {/* ── Input ── */}
         <Box
           width={termWidth}
-          height={inputHeight}
+          height={inputH}
           borderStyle="single"
           borderTop={true}
           borderBottom={false}
@@ -396,20 +390,18 @@ export const ChatApp: React.FC<ChatAppProps> = ({
           borderColor={agentBusy ? theme.accent : theme.borderFocused}
         >
           <TextInput
-            placeholder={
-              agentBusy ? 'Agent is thinking...' : 'Type a message...'
-            }
+            placeholder={agentBusy ? 'Agent is thinking…' : 'Type a message…'}
             disabled={agentBusy}
             onSubmit={handleSend}
           />
         </Box>
       </Box>
 
-      {/* ── Status bar — OpenCode colored block style ── */}
+      {/* ── Status bar ── */}
       <StatusBar
         theme={theme}
         model={model}
-        info={error ? `Error: ${error}` : undefined}
+        info={error ? error : undefined}
         agentBusy={agentBusy}
         width={termWidth}
       />
