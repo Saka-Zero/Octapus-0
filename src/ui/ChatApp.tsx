@@ -37,7 +37,8 @@ type DisplayItem =
   | { kind: 'assistant'; text: string }
   | { kind: 'note'; text: string }
   | { kind: 'error'; text: string }
-  | { kind: 'diff'; title: string; lines: string[] };
+  | { kind: 'diff'; title: string; lines: string[] }
+  | { kind: 'tool'; glyph: string; verb: string; args: string; detail?: string };
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -158,6 +159,7 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
   const abortRef = useRef<AbortController | null>(null);
   const queueRef = useRef<string[]>([]);
   const lastAssistantRef = useRef('');
+  const lastToolArgsRef = useRef('{}');
 
   const enabledCount = Object.values(config.providers as Record<string, { enabled?: boolean }>)
     .filter((p) => p.enabled).length;
@@ -257,13 +259,36 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
             if (!flushTimer) { setThinking(false); startFlusher(); }
             streamText += chunk;
           },
-          onToolStart: (name, args) => pushNote(`🔧 ${name} ${args}`),
+          onToolStart: (name, argsStr) => { lastToolArgsRef.current = argsStr; pushNote(`⠙ ${name} ${argsStr}`); },
           onToolResult: (name, ok, output, diff) => {
-            if (ok && diff && diff.length > 0) {
-              setDisplay((d) => [...d, { kind: 'diff', title: `${name}: ${output.split('(')[0].trim()}`, lines: diff }]);
+            if (!ok) {
+              setDisplay((d) => [...d, { kind: 'error', text: `✗ ${name} — ${output.slice(0, 200)}` }]);
+              return;
+            }
+            // OpenCode-style single-line tool rows: glyph + verb + args (+ dim detail)
+            let parsedArgs: any = {};
+            try { parsedArgs = JSON.parse(lastToolArgsRef.current || '{}'); } catch {}
+            const map: Record<string, { glyph: string; verb: string; args: string; detail?: string }> = {
+              read_file: { glyph: '→', verb: 'Read', args: String(parsedArgs.path || '') },
+              list_dir: { glyph: '→', verb: 'List', args: String(parsedArgs.path || '.') },
+              search_files: { glyph: '✱', verb: 'Search', args: `"${parsedArgs.pattern || ''}" in ${parsedArgs.path || 'src'}`, detail: `${output.split('\n').length - 1} lines` },
+              web_search: { glyph: '✱', verb: 'Web', args: `"${parsedArgs.query || ''}"` },
+              web_fetch: { glyph: '→', verb: 'Fetch', args: String(parsedArgs.url || '') },
+              write_file: { glyph: '→', verb: fs.existsSync(String(parsedArgs.path || '')) ? 'Write' : 'Create', args: String(parsedArgs.path || '') },
+              replace_in_file: { glyph: '→', verb: 'Edit', args: String(parsedArgs.path || '') },
+              run_command: { glyph: '$', verb: '', args: String(parsedArgs.command || '') },
+              task_progress: { glyph: '↳', verb: 'Focus chain', args: `${output.match(/(\d+)\/\d+/)?.[0] || ''} steps` }
+            };
+            const row = map[name] || { glyph: '✓', verb: name, args: JSON.stringify(parsedArgs).slice(0, 80) };
+
+            if (name === 'write_file' || name === 'replace_in_file') {
+              if (diff && diff.length > 0) {
+                setDisplay((d) => [...d, { kind: 'tool', ...row }, { kind: 'diff', title: '', lines: diff }]);
+              } else {
+                setDisplay((d) => [...d, { kind: 'tool', ...row, detail: output.slice(0, 60) }]);
+              }
             } else {
-              const preview = output.length > 300 ? output.slice(0, 300) + '…' : output;
-              setDisplay((d) => [...d, { kind: 'note', text: `${ok ? '✔' : '✗'} ${name} → ${preview}` }]);
+              setDisplay((d) => [...d, { kind: 'tool', ...row }]);
             }
           },
           approval: (tool, summary) =>
@@ -769,30 +794,41 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
     <Box flexDirection="column">
       <Static items={display}>
         {(item: DisplayItem, i: number) => (
-          <Box key={i} flexDirection="column" marginTop={1}>
+          <Box key={i} flexDirection="column" marginTop={1} paddingLeft={2}>
             {item.kind === 'user' && (
-              <Box paddingLeft={1}>
-                <Text color={theme.primary} bold>{'❯ '}</Text>
+              <Box flexDirection="column">
+                <Text color={theme.primary} bold>You</Text>
                 <Text color={theme.text}>{item.text}</Text>
               </Box>
             )}
             {item.kind === 'assistant' && (
-              <Box flexDirection="column" paddingLeft={1}>
-                <Text>{renderMarkdown(item.text, { accent: theme.primary, muted: theme.borderActive })}</Text>
-              </Box>
+              <Text>{renderMarkdown(item.text, { accent: theme.primary, muted: theme.borderActive })}</Text>
             )}
             {item.kind === 'note' && (
-              <Box paddingLeft={3}><Text color={theme.textMuted} italic>{item.text}</Text></Box>
+              <Text color={theme.textMuted} italic>{item.text}</Text>
             )}
             {item.kind === 'error' && (
-              <Box paddingLeft={3}><Text color={theme.error}>{item.text}</Text></Box>
+              <Box flexDirection="column">
+                <Text color={theme.error}>{'│'}</Text>
+                <Text color={theme.error}>{'│  '}{item.text}</Text>
+                <Text color={theme.error}>{'│'}</Text>
+              </Box>
+            )}
+            {item.kind === 'tool' && (
+              <Box flexDirection="column">
+                <Text>
+                  <Text color={theme.accent}>{item.glyph + ' '}</Text>
+                  <Text bold>{item.verb + ' '}</Text>
+                  <Text color={theme.text}>{item.args}</Text>
+                  {item.detail && <Text color={theme.textMuted}>{'  ' + item.detail}</Text>}
+                </Text>
+              </Box>
             )}
             {item.kind === 'diff' && (
-              <Box flexDirection="column" paddingLeft={3} borderStyle="round" borderColor={theme.border} paddingX={1}>
-                <Text color={theme.accent} bold>{item.title}</Text>
+              <Box flexDirection="column" paddingLeft={2}>
                 {item.lines.map((l, li) => (
                   <Text key={li} color={l.startsWith('+') ? theme.diffAdded : l.startsWith('-') ? theme.diffRemoved : theme.textMuted}>
-                    {l}
+                    {'  ' + l}
                   </Text>
                 ))}
               </Box>
@@ -801,37 +837,11 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         )}
       </Static>
 
-      {/* ASCII welcome — first launch only */}
-      {display.length === 0 && (
-        <Box flexDirection="column" alignItems="center" marginBottom={0}>
-          <Text color={theme.primary} bold>{'    ___  ___ _ __ __ ___ _    ___ '}</Text>
-          <Text color={theme.primary} bold>{"   / _ \\|_  ) | '_ \\_ ) | |  / _ \\"}</Text>
-          <Text color={theme.primary} bold>{'  | (_) |/ /| | | | / /| |_| (_) |'}</Text>
-          <Text color={theme.primary} bold>{'   \\___//___|_|_|__/___|____\\___/ '}</Text>
-          <Text color={theme.textMuted}> multi-provider AI agent · esc interrupts · /help commands</Text>
-        </Box>
-      )}
-
-      {/* Slim header */}
-      <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={display.length === 0 ? 0 : 1}>
-        <Text>
-          <Text color={theme.primary} bold>octapus</Text>
-          <Text color={theme.textMuted}> v0.1.0</Text>
-          {agentMode && <Text color={theme.warning} bold> · agent</Text>}
-          {councilMode && <Text color={theme.accent} bold> · 🏛️ council</Text>}
-          <Text color={theme.textMuted}>{'  │  '}</Text>
-          <Text color={theme.accent}>{headerModel}</Text>
-          <Text color={theme.textMuted}>
-            {'  │  '}mem {memoryCount}
-            {'  │  '}prov {enabledCount}
-            {'  │  '}ssn …{headerSessionId.slice(-8)}
-          </Text>
-        </Text>
-      </Box>
+      {/* OpenCode-faithful: NO header. Metadata lives in the footer. */}
 
       {/* Streaming */}
       {(thinking || streaming !== null) && (
-        <Box flexDirection="column" marginTop={1} paddingLeft={1}>
+        <Box flexDirection="column" marginTop={1} paddingLeft={2}>
           {thinking && <Spinner label="thinking… (esc interrupts)" color={theme.accent} />}
           {streaming !== null && (
             <Text>{renderMarkdown(streaming, { accent: theme.primary, muted: theme.borderActive })}</Text>
@@ -883,11 +893,16 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         />
       )}
 
-      {/* Input */}
+      {/* Input — rounded bordered composer (OpenCode style) */}
       {!pickerOpen && !sessionPickerOpen && !pendingApproval && (
-        <Box marginTop={1}>
+        <Box
+          borderStyle="round"
+          borderColor={busy ? theme.border : theme.borderActive}
+          paddingX={1}
+          marginTop={1}
+        >
           <TextInput
-            placeholder={busy ? (queueRef.current.length ? `queued: ${queueRef.current.length}` : 'esc interrupts…') : 'Type a message… (/help)'}
+            placeholder={busy ? (queueRef.current.length ? `queued: ${queueRef.current.length}` : 'esc interrupts…') : 'Plan any feature… (/help)'}
             disabled={busy}
             history={inputHistory}
             onSubmit={handleSubmit}
@@ -895,19 +910,26 @@ export function ChatApp({ router, session: initialSession, config, options }: Ch
         </Box>
       )}
 
-      {/* Minimal status line */}
-      <Box>
+      {/* Footer line 1: model · modes · memory | tokens · cost (dim) */}
+      <Box justifyContent="space-between" marginTop={0}>
         <Text color={theme.textMuted}>
-          <Text color={theme.success}>● </Text>
-          {lastProviderRef.current || 'ready'}
-          {'  │  '}{headerModel}
-          {agentMode ? '  │  🤖 agent' : ''}
-          {'  │  '}
-          {new Intl.NumberFormat('en-US').format(totals.tokensIn)}→{new Intl.NumberFormat('en-US').format(totals.tokensOut)} tok
-          {'  │  '}
+          {headerModel}
+          {agentMode ? ' · agent' : ''}
+          {isPlanMode() ? ' · plan' : ''}
+          {councilMode ? ' · council' : ''}
+          {'  ·  '}
+          mem {memoryCount} · prov {enabledCount}
+        </Text>
+        <Text color={theme.textMuted}>
+          {new Intl.NumberFormat('en-US').format(totals.tokensIn)}→{new Intl.NumberFormat('en-US').format(totals.tokensOut)} tok ·{' '}
           <Text color={totals.cost === 0 ? theme.success : theme.warning}>{formatCost(totals.cost)}</Text>
         </Text>
       </Box>
+
+      {/* Footer line 2: keybind hints (dimmest) */}
+      <Text dimColor>
+        {'/help commands   /models picker   /agent tools   /council debate   esc interrupt'}
+      </Text>
     </Box>
   );
 }
