@@ -5,6 +5,13 @@ import { getTheme, Theme } from './theme';
 import { TextInput } from './TextInput';
 import { ModelPicker } from './ModelPicker';
 import { SessionPicker } from './SessionPicker';
+import {
+  useSpinner,
+  useBlinkCursor,
+  useAnimatedDots,
+  usePulse,
+  useBatchedText,
+} from './effects';
 import { Router } from '../router';
 import { ConversationSession } from '../utils/history';
 import { Config } from '../config';
@@ -25,7 +32,7 @@ interface ChatAppProps {
   options: any;
 }
 
-// ── Terminal size hook (ink 3 has no useStdinDimensions) ────────────────────────
+// ── Terminal size (ink 3 has no useStdinDimensions) ─────────────────────────────
 
 function useTerminalSize() {
   const [size, setSize] = useState({
@@ -44,33 +51,7 @@ function useTerminalSize() {
   return size;
 }
 
-// ── Animated spinner ───────────────────────────────────────────────────────────
-
-const SPIN_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-function useSpinner(active: boolean): string {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    if (!active) { setFrame(0); return; }
-    const id = setInterval(() => setFrame((f) => (f + 1) % SPIN_FRAMES.length), 80);
-    return () => clearInterval(id);
-  }, [active]);
-  return SPIN_FRAMES[frame];
-}
-
-// ── Blinking cursor for streaming ──────────────────────────────────────────────
-
-function useBlinkCursor(active: boolean): string {
-  const [on, setOn] = useState(true);
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => setOn((v) => !v), 530);
-    return () => clearInterval(id);
-  }, [active]);
-  return active ? (on ? '▌' : ' ') : '';
-}
-
-// ── Status bar — single-line colored segments, no width math ───────────────────
+// ── Status bar ─────────────────────────────────────────────────────────────────
 
 const StatusBar: React.FC<{
   theme: Theme;
@@ -79,52 +60,56 @@ const StatusBar: React.FC<{
   info?: string;
   agentBusy: boolean;
   width: number;
-}> = ({ theme, model, tokenUsage, info, agentBusy, width }) => {
-  const spin = useSpinner(agentBusy);
-
-  // Shorten model name if too long
+  messageCount: number;
+}> = ({ theme, model, tokenUsage, info, agentBusy, width, messageCount }) => {
+  const spin = useSpinner(agentBusy, 'braille');
+  const thinkingLabel = useAnimatedDots('thinking', agentBusy, 400);
   const modelLabel = model.length > 28 ? model.slice(0, 25) + '…' : model;
-  const tokenLabel = tokenUsage
-    ? `${tokenUsage.input.toLocaleString()} in · ${tokenUsage.output.toLocaleString()} out`
-    : null;
 
   return (
     <Box width={width} flexDirection="row">
-      {/* help shortcut */}
+      {/* help */}
       <Text backgroundColor={theme.backgroundDarker} color={theme.textMuted}>
         {' ctrl+? help '}
       </Text>
 
-      {/* token counter — only when there's data */}
-      {tokenLabel && (
+      {/* message count */}
+      <Text backgroundColor={theme.backgroundSecondary} color={theme.textMuted}>
+        {' ' + messageCount + ' msgs '}
+      </Text>
+
+      {/* token counter */}
+      {tokenUsage && tokenUsage.input > 0 ? (
         <Text
           backgroundColor={
-            tokenUsage && tokenUsage.input > 100000
-              ? theme.warning
-              : theme.backgroundSecondary
+            tokenUsage.input > 100000 ? theme.warning : theme.backgroundSecondary
           }
-          color={tokenUsage && tokenUsage.input > 100000 ? theme.background : theme.text}
+          color={
+            tokenUsage.input > 100000 ? theme.background : theme.text
+          }
         >
-          {' ' + tokenLabel + ' '}
+          {' ' + tokenUsage.input.toLocaleString() + ' in · ' + tokenUsage.output.toLocaleString() + ' out '}
         </Text>
-      )}
+      ) : null}
 
-      {/* info / error line */}
-      {info && info.length > 0 && (
+      {/* error info */}
+      {info && info.length > 0 ? (
         <Text backgroundColor={theme.error} color={theme.background}>
-          {' ' + info.slice(0, Math.max(0, width - 80)) + ' '}
+          {' ✖ ' + info.slice(0, Math.max(0, width - 100)) + ' '}
         </Text>
-      )}
+      ) : null}
 
       {/* thinking spinner */}
-      {agentBusy && (
-        <Text backgroundColor={theme.accent} color={theme.background}>
-          {' ' + spin + ' thinking… '}
+      {agentBusy ? (
+        <Text backgroundColor={theme.accent} color={theme.background} bold>
+          {' ' + spin + ' ' + thinkingLabel + ' '}
         </Text>
-      )}
+      ) : null}
 
-      {/* right-aligned model tag — pushed by remaining space via flex */}
+      {/* spacer — pushes model to the right */}
       <Text> </Text>
+
+      {/* model tag */}
       <Text backgroundColor={theme.secondary} color={theme.background} bold>
         {' ' + modelLabel + ' '}
       </Text>
@@ -132,14 +117,40 @@ const StatusBar: React.FC<{
   );
 };
 
-// ── Message component with left border ─────────────────────────────────────────
+// ── Streaming message with smooth batched text ─────────────────────────────────
 
-const MessageComponent: React.FC<{
+const StreamingMessage: React.FC<{
+  content: string;
+  model?: string;
+  theme: Theme;
+  width: number;
+}> = ({ content, model, theme, width }) => {
+  const cursor = useBlinkCursor(true);
+  const rendered = renderMarkdown(content, { theme });
+
+  return (
+    <Box width={width} flexDirection="row">
+      <Box width={2} flexShrink={0}>
+        <Text color={theme.primary}>┃ </Text>
+      </Box>
+      <Box flexDirection="column" width={width - 2}>
+        <Text color={theme.primary} bold>{model || 'Assistant'}</Text>
+        <Text wrap="wrap">
+          {rendered}
+          <Text color={theme.accent}>{cursor}</Text>
+        </Text>
+      </Box>
+    </Box>
+  );
+};
+
+// ── Static (completed) message ─────────────────────────────────────────────────
+
+const StaticMessage: React.FC<{
   message: Message;
   theme: Theme;
   width: number;
-  streaming: boolean;
-}> = ({ message, theme, width, streaming }) => {
+}> = ({ message, theme, width }) => {
   const borderColors: Record<string, string> = {
     user: theme.secondary,
     assistant: theme.primary,
@@ -147,11 +158,7 @@ const MessageComponent: React.FC<{
     tool: theme.accent,
   };
   const color = borderColors[message.role] || theme.textMuted;
-
   const rendered = renderMarkdown(message.content, { theme });
-
-  // Hook must always be called — condition is inside
-  const cursor = useBlinkCursor(streaming);
 
   return (
     <Box width={width} flexDirection="row">
@@ -166,9 +173,30 @@ const MessageComponent: React.FC<{
             ? message.model
             : message.role.charAt(0).toUpperCase() + message.role.slice(1)}
         </Text>
-        <Text wrap="wrap">
-          {rendered}
-          {cursor ? <Text color={theme.accent}>{cursor}</Text> : null}
+        <Text wrap="wrap">{rendered}</Text>
+      </Box>
+    </Box>
+  );
+};
+
+// ── Thinking indicator (shown while waiting for first chunk) ───────────────────
+
+const ThinkingIndicator: React.FC<{ theme: Theme; width: number }> = ({
+  theme,
+  width,
+}) => {
+  const spin = useSpinner(true, 'braille');
+  const dots = useAnimatedDots('awaiting response', true, 500);
+  const pulse = usePulse(theme.accent, theme.textMuted, 600);
+
+  return (
+    <Box width={width} flexDirection="row">
+      <Box width={2} flexShrink={0}>
+        <Text color={pulse}>┃ </Text>
+      </Box>
+      <Box flexDirection="column" width={width - 2}>
+        <Text color={theme.textMuted} dim>
+          {' ' + spin + ' ' + dots}
         </Text>
       </Box>
     </Box>
@@ -185,7 +213,8 @@ export const ChatApp: React.FC<ChatAppProps> = ({
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
-  const [streamingMsg, setStreamingMsg] = useState<number | null>(null);
+  const [streamingContent, setStreamingContent] = useState<string | null>(null);
+  const [streamingModel, setStreamingModel] = useState<string>('');
   const [model, setModel] = useState(
     options?.model || config.defaultModel || 'gpt-4'
   );
@@ -201,18 +230,22 @@ export const ChatApp: React.FC<ChatAppProps> = ({
 
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
-  const scrollRef = useRef<number>(0);
+
+  // Batched text accumulator for smooth streaming
+  const batched = useBatchedText(30);
 
   useEffect(() => {
     busyRef.current = agentBusy;
   }, [agentBusy]);
 
-  // Auto-scroll: keep bottom visible
+  // Sync batched text → streaming state (React re-render)
   useEffect(() => {
-    scrollRef.current = messages.length;
-  }, [messages.length]);
+    if (streamingContent !== null) {
+      setStreamingContent(batched.text);
+    }
+  }, [batched.text]);
 
-  // ── Send handler with streaming ──────────────────────────────────────────────
+  // ── Send handler ─────────────────────────────────────────────────────────────
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -226,8 +259,9 @@ export const ChatApp: React.FC<ChatAppProps> = ({
 
       setMessages((prev) => [...prev, userMsg]);
       setAgentBusy(true);
-      setStreamingMsg(null);
       setError(null);
+      setStreamingContent(''); // empty = waiting for first chunk
+      batched.reset();
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -248,62 +282,70 @@ export const ChatApp: React.FC<ChatAppProps> = ({
           fallbackModels: config.fallbackModels,
         });
 
-        let content = '';
         let firstChunk = true;
 
         for await (const event of chatGen) {
           if (controller.signal.aborted) break;
 
           if (event.type === 'text') {
-            content += event.text;
-
             if (firstChunk) {
-              // Insert assistant message placeholder
-              const idx = messages.length + 1; // +1 for the user msg we just added
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'assistant',
-                  content,
-                  model,
-                  timestamp: Date.now(),
-                },
-              ]);
-              setStreamingMsg(idx);
+              setStreamingModel(model);
               firstChunk = false;
-            } else {
-              // Update last message in place
-              setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last && last.role === 'assistant') {
-                  updated[updated.length - 1] = { ...last, content };
-                }
-                return updated;
-              });
             }
+            // Push to batched buffer — flushed at 30ms intervals for smooth rendering
+            batched.push(event.text);
           }
+        }
+
+        // Finalize: move streamed text into messages array
+        const finalContent = batched.text;
+        if (finalContent.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: finalContent,
+              model,
+              timestamp: Date.now(),
+            },
+          ]);
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
           setError(err.message || 'Unknown error');
+          // If we got partial content, still save it
+          if (batched.text.length > 0) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: 'assistant',
+                content: batched.text + '\n\n⚠ Stream interrupted: ' + (err.message || 'error'),
+                model,
+                timestamp: Date.now(),
+              },
+            ]);
+          }
         }
       } finally {
         setAgentBusy(false);
-        setStreamingMsg(null);
+        setStreamingContent(null);
+        setStreamingModel('');
+        batched.reset();
         abortRef.current = null;
       }
     },
-    [messages, model, router, config]
+    [messages, model, router, config, batched]
   );
 
   const handleAbort = useCallback(() => {
     if (busyRef.current && abortRef.current) {
       abortRef.current.abort();
       setAgentBusy(false);
-      setStreamingMsg(null);
+      setStreamingContent(null);
+      setStreamingModel('');
+      batched.reset();
     }
-  }, []);
+  }, [batched]);
 
   // ── Key bindings ─────────────────────────────────────────────────────────────
 
@@ -323,6 +365,16 @@ export const ChatApp: React.FC<ChatAppProps> = ({
   const headerH = 1;
   const inputH = 3;
   const chatH = termHeight - statusBarH - headerH - inputH;
+
+  // Count tokens used (rough estimate from messages)
+  const tokenUsage = messages.length > 0
+    ? {
+        input: messages.reduce((s, m) => s + Math.ceil(m.content.length / 4), 0),
+        output: messages
+          .filter((m) => m.role === 'assistant')
+          .reduce((s, m) => s + Math.ceil(m.content.length / 4), 0),
+      }
+    : undefined;
 
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
@@ -353,7 +405,7 @@ export const ChatApp: React.FC<ChatAppProps> = ({
           height={chatH}
           overflow="hidden"
         >
-          {messages.length === 0 ? (
+          {messages.length === 0 && !agentBusy ? (
             <Box justifyContent="center" alignItems="center" height={chatH}>
               <Text color={theme.textMuted}>
                 Start a conversation… (Ctrl+M model · Ctrl+S sessions)
@@ -361,22 +413,37 @@ export const ChatApp: React.FC<ChatAppProps> = ({
             </Box>
           ) : (
             messages.map((msg, i) => (
-              <MessageComponent
+              <StaticMessage
                 key={`${msg.timestamp}-${i}`}
                 message={msg}
                 theme={theme}
                 width={termWidth}
-                streaming={streamingMsg === i}
               />
             ))
           )}
+
+          {/* Streaming indicator — waiting for first chunk */}
+          {agentBusy && streamingContent === '' ? (
+            <ThinkingIndicator theme={theme} width={termWidth} />
+          ) : null}
+
+          {/* Streaming message — receiving chunks */}
+          {agentBusy && streamingContent !== null && streamingContent.length > 0 ? (
+            <StreamingMessage
+              content={streamingContent}
+              model={streamingModel}
+              theme={theme}
+              width={termWidth}
+            />
+          ) : null}
         </Box>
 
-        {error && error.length > 0 && (
+        {/* Error line */}
+        {error && error.length > 0 ? (
           <Box width={termWidth} paddingLeft={2}>
             <Text color={theme.error}>{'✖ ' + error}</Text>
           </Box>
-        )}
+        ) : null}
 
         {/* ── Input ── */}
         <Box
@@ -401,9 +468,11 @@ export const ChatApp: React.FC<ChatAppProps> = ({
       <StatusBar
         theme={theme}
         model={model}
+        tokenUsage={tokenUsage}
         info={error ? error : undefined}
         agentBusy={agentBusy}
         width={termWidth}
+        messageCount={messages.length}
       />
 
       {/* ── Overlays ── */}
