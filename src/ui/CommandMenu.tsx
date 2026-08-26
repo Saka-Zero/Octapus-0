@@ -1,14 +1,15 @@
-// ── CommandMenu v2 ── OpenCode-style command palette ───────────────────────────
+// ── CommandMenu v2 ── OpenCode-style command palette with expandable categories ─────
 //
-// Design principles (from OpenCode DialogSelect + blink-tui + glyph):
-//   - Flat list with category headers (NO expand/collapse sub-menus)
-//   - Fuzzy search via fuzzysort (title weighted 2x over category)
+// Design principles:
+//   - Flat list with expandable/collapsible category headers
+//   - Fuzzy search via fuzzysort (title 2x weight over category)
 //   - Suggested items at top when filter is empty
 //   - Keybind hints right-aligned on each row
-//   - Dynamic height: Math.min(totalItems, Math.floor(termHeight / 2) - 2)
+//   - Dynamic height: Math.min(totalVisibleItems, Math.floor(termHeight / 2) - 2)
 //   - Clean single-line border (NO pulsing animation)
-//   - SearchInput on top, list below
+//   - SearchInput on top, results below
 //   - Inline counter: 3/42
+//   - Category expand/collapse: ▾ expanded / ▸ collapsed, Enter to toggle
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
@@ -52,9 +53,11 @@ interface FlatEntry {
   category?: string;
   item?: CommandItem;
   flatIndex: number;
+  /** For headers: whether this category is currently expanded */
+  expanded?: boolean;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────────
 
 const PROVIDER_COLORS: Record<string, string> = {
   openai: 'green', anthropic: 'cyan', google: 'yellow', gemini: 'yellow',
@@ -98,6 +101,7 @@ export function CommandMenu({
   const [filter, setFilter] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [sessions, setSessions] = useState<ConversationSession[]>([]);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const termHeight = process.stdout.rows || 24;
 
   // Load sessions on mount
@@ -296,7 +300,7 @@ export function CommandMenu({
     return results.map((r) => r.obj);
   }, [allItems, filter]);
 
-  // ── Flatten into display entries (headers + items) ──────────────────────────
+  // ── Flatten into display entries (headers + items) with expand/collapse ──────
 
   const flatEntries = useMemo((): FlatEntry[] => {
     const entries: FlatEntry[] = [];
@@ -305,23 +309,37 @@ export function CommandMenu({
 
     for (const item of filtered) {
       const cat = item.category || '';
+
+      // Always add the header when category changes
       if (cat !== lastCategory) {
-        entries.push({ type: 'header', category: cat, flatIndex: fi++ });
+        const isCategoryExpanded = expandedCategories.has(cat);
+        entries.push({
+          type: 'header',
+          category: cat,
+          flatIndex: fi++,
+          expanded: isCategoryExpanded,
+        });
         lastCategory = cat;
       }
-      entries.push({ type: 'item', item, flatIndex: fi++ });
+
+      // Only add item if category is expanded OR has no category (top-level)
+      const isCategoryExpanded = !cat || expandedCategories.has(cat);
+      if (isCategoryExpanded) {
+        entries.push({ type: 'item', item, flatIndex: fi++ });
+      }
+      // If category is collapsed, skip the item (header already shown above)
     }
 
     return entries;
-  }, [filtered]);
+  }, [filtered, expandedCategories]);
 
-  // Only item entries (for navigation)
+  // Only item entries (for navigation — these are the visible items)
   const itemEntries = useMemo(
     () => flatEntries.filter((e) => e.type === 'item') as (FlatEntry & { item: CommandItem })[],
     [flatEntries]
   );
 
-  // Keep selectedIndex in bounds
+  // Keep selectedIndex in bounds, respecting visible item count
   useEffect(() => {
     setSelectedIndex((i) => Math.min(i, Math.max(0, itemEntries.length - 1)));
   }, [itemEntries.length]);
@@ -333,22 +351,27 @@ export function CommandMenu({
 
   // ── Dynamic height ─────────────────────────────────────────────────────────
 
+  // Calculate max visible entries: account for expanded categories taking space
+  // Each expanded category adds 1 header line + its items' lines
+  // We estimate: base height = Math.floor(termHeight / 2) - 2, then adjust
   const maxVisible = useMemo(() => {
-    // Reserve: 1 header + 1 input + 1 footer = 3 lines, minus some padding
-    return Math.min(flatEntries.length, Math.floor(termHeight / 2) - 2);
-  }, [flatEntries.length, termHeight]);
+    // Base: reserve some lines for input/footer
+    const baseHeight = Math.floor(termHeight / 2) - 2;
+    // Count how many item entries we'd show if all categories expanded
+    // (this is a rough estimate for height calculation)
+    const totalIfAllExpanded = itemEntries.length; // already only shows visible items
+    return Math.min(totalIfAllExpanded, baseHeight);
+  }, [itemEntries.length, termHeight]);
 
   // Current flatIndex of selected item
   const selectedFlatIndex = itemEntries[selectedIndex]?.flatIndex ?? 0;
 
-  // Compute scroll window
+  // Compute scroll window — only over visible entries
   const windowEntries = useMemo(() => {
-    // Find the window of flat entries to show
     let start = 0;
     let count = 0;
     for (let i = 0; i < flatEntries.length; i++) {
       if (flatEntries[i].flatIndex === selectedFlatIndex) {
-        // Center the selection
         start = Math.max(0, i - Math.floor(maxVisible / 2));
         break;
       }
@@ -370,7 +393,7 @@ export function CommandMenu({
       return;
     }
 
-    // Navigation
+    // Navigation: Up/Down move through visible item entries only
     if (key.upArrow || (key.ctrl && inputChar === 'p')) {
       setSelectedIndex((i) => Math.max(0, i - 1));
       return;
@@ -397,11 +420,27 @@ export function CommandMenu({
       return;
     }
 
-    // Select
+    // Select / Toggle expand/collapse
     if (key.return) {
-      const entry = itemEntries[selectedIndex];
-      if (entry?.item) {
-        onAction(entry.item.action, entry.item.payload);
+      const entry = flatEntries[selectedIndex];
+      if (entry?.type === 'header') {
+        // Toggle expand/collapse for this category
+        setExpandedCategories((prev) => {
+          const next = new Set(prev);
+          if (next.has(entry.category ?? '')) {
+            next.delete(entry.category ?? '');
+          } else {
+            next.add(entry.category ?? '');
+          }
+          return next;
+        });
+        // After toggling, reset selected to top (or keep position - here we keep)
+        // selectedIndex stays, but flatEntries will re-compute on next render
+        return;
+      }
+      const itemEntry = itemEntries[selectedIndex];
+      if (itemEntry?.item) {
+        onAction(itemEntry.item.action, itemEntry.item.payload);
         onClose();
       }
       return;
@@ -463,9 +502,11 @@ export function CommandMenu({
             if (entry.type === 'header') {
               return (
                 <Box key={`h:${entry.category}`} paddingTop={1}>
-                  <Text color="gray" bold>
-                    {'  '}{entry.category}
-                  </Text>
+                  <Box flexDirection="row" justifyContent="space-between">
+                    <Text color="gray" bold>
+                      {'  '}{entry.category}{' '}{entry.expanded ? '▾' : '▸'}
+                    </Text>
+                  </Box>
                 </Box>
               );
             }
