@@ -16,6 +16,9 @@ export async function startTui(
   config: any,
   options: any
 ): Promise<void> {
+  // ── Pre-render setup: enter alternate screen buffer & hide cursor ──
+  process.stdout.write('\x1b[?1049h\x1b[?25l');
+
   const instance = render(
     <ChatApp router={router} session={session} config={config} options={options} />
   );
@@ -26,6 +29,8 @@ export async function startTui(
     cleanedUp = true;
     try { mcpManager.disconnectAll(); } catch {}
     try { instance.unmount(); } catch {}
+    // ── Post-render teardown: restore main screen & cursor ──
+    process.stdout.write('\x1b[?1049l\x1b[?25h\x1b[2J\x1b[H');
   };
 
   // Terminal/window death vectors (Windows delivers these unreliably — register all)

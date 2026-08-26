@@ -461,7 +461,8 @@ export const ChatApp: React.FC<ChatAppProps> = ({
   const statusBarH = 1;
   const headerH = 1;
   const inputH = 3;
-  const chatH = termHeight - statusBarH - headerH - inputH;
+  // 2 extra lines of margin to strictly prevent any border/render overflow
+  const chatH = termHeight - statusBarH - headerH - inputH - 2; // = termHeight - 7
 
   // Count tokens used (rough estimate from messages)
   const tokenUsage = messages.length > 0
@@ -494,14 +495,9 @@ export const ChatApp: React.FC<ChatAppProps> = ({
       </Box>
 
       {/* ── Chat area + Input ── */}
-      <Box flexDirection="column" width={termWidth} height={chatH + inputH}>
+      <Box flexDirection="column" width={termWidth}>
         {/* ── Messages viewport ── */}
-        <Box
-          flexDirection="column"
-          width={termWidth}
-          height={chatH}
-          overflow="hidden"
-        >
+        <Box flexDirection="column" width={termWidth}>
           {messages.length === 0 && !agentBusy ? (
             <Box justifyContent="center" alignItems="center" height={chatH}>
               <Text color={theme.textMuted}>
