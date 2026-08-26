@@ -84,7 +84,7 @@ const StatusBar: React.FC<{
         </Text>
       </Box>
 
-      {tokenText && (
+      {tokenText.length > 0 && (
         <Box width={tokenW} justifyContent="center">
           <Text
             backgroundColor={
@@ -107,7 +107,7 @@ const StatusBar: React.FC<{
         </Box>
       )}
 
-      {statusText && (
+      {statusText.length > 0 && (
         <Box width={statusW} justifyContent="center">
           <Text backgroundColor={theme.accent} color={theme.background}>
             {statusText}
