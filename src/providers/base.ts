@@ -51,7 +51,8 @@ export interface Provider {
 /** Streaming events emitted by providers */
 export type StreamEvent =
   | { type: 'text'; text: string }
-  | { type: 'tool_calls'; calls: ToolCall[] };
+  | { type: 'tool_calls'; calls: ToolCall[] }
+  | { type: 'usage'; usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
 
 export interface ProviderConfig {
   apiKey?: string;

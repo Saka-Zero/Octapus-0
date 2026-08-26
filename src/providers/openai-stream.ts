@@ -20,6 +20,13 @@ export class ProviderHttpError extends Error {
   }
 }
 
+/** Real usage reported by the provider (when available) */
+export interface UsageInfo {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
 /**
  * Core OpenAI-compatible streaming engine.
  * Handles SSE parsing, text deltas, and incremental tool_call assembly.
@@ -94,6 +101,63 @@ export async function* streamOpenAI(opts: {
 
   // Assemble streamed tool_call deltas keyed by index
   const pendingCalls = new Map<number, { id: string; name: string; args: string }>();
+  // SSE spec: an event's data may span multiple "data:" lines (join with \n)
+  let dataLines: string[] | null = null;
+  let sawDone = false;
+  const MAX_BUFFER = 8_000_000; // malicious/no-newline streams must not OOM us
+
+  /** Process one complete data payload. Throws ProviderHttpError on in-stream errors. */
+  const handleData = (payload: string): StreamEvent[] => {
+    if (payload === '[DONE]') { sawDone = true; return []; }
+    let parsed: any;
+    try { parsed = JSON.parse(payload); } catch { return []; }
+    return handleParsed(parsed);
+  };
+
+  /** Core event extraction from a parsed SSE payload */
+  const handleParsed = (parsed: any): StreamEvent[] => {
+    if (parsed.error) {
+      const code = parsed.error?.code === 429 || parsed.error?.status === 'RESOURCE_EXHAUSTED' ? 429 : 0;
+      throw new ProviderHttpError(providerName, code, undefined, JSON.stringify(parsed.error).slice(0, 300));
+    }
+    const events: StreamEvent[] = [];
+    // Real provider-reported usage (final chunk) — beats local estimation
+    if (parsed.usage && typeof parsed.usage === 'object') {
+      events.push({ type: 'usage', usage: parsed.usage });
+    }
+    const delta = parsed.choices?.[0]?.delta;
+    if (!delta) return events;
+
+    if (typeof delta.content === 'string' && delta.content) {
+      events.push({ type: 'text', text: delta.content });
+    }
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls as DeltaToolCall[]) {
+        // Validate index: integer, bounded — prevents Map flooding / NaN sorts
+        if (!Number.isInteger(tc.index) || (tc.index as number) < 0 || (tc.index as number) > 127) continue;
+        const slot = pendingCalls.get(tc.index) || { id: '', name: '', args: '' };
+        if (tc.id) slot.id = tc.id;
+        if (tc.function?.name) slot.name += tc.function.name;
+        if (tc.function?.arguments) slot.args += tc.function.arguments;
+        pendingCalls.set(tc.index, slot);
+      }
+    }
+    return events;
+  };
+
+  const flushDataLines = async function* (): AsyncGenerator<StreamEvent> {
+    if (!dataLines || dataLines.length === 0) { dataLines = null; return; }
+    const lines2 = dataLines;
+    dataLines = null;
+    let parsed: any;
+    const joined = lines2.join('\n');
+    try { parsed = JSON.parse(joined); } catch {
+      // Fallback: some splitters mean concatenation, not newline-join
+      try { parsed = JSON.parse(lines2.join('')); } catch { return; }
+    }
+    for (const evt of handleParsed(parsed)) yield evt;
+    if (sawDone) { yield* emitCalls(pendingCalls); }
+  };
 
   try {
     while (true) {
@@ -101,46 +165,43 @@ export async function* streamOpenAI(opts: {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_BUFFER) {
+        throw new ProviderHttpError(providerName, 0, undefined, 'SSE buffer overflow — stream produced no line endings');
+      }
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
+      for (const rawLine of lines) {
+        const line = rawLine.replace(/\r$/, '');
 
-        if (data === '[DONE]') {
+        if (line === '') {
+          // Blank line = SSE event boundary
+          yield* flushDataLines();
+          if (sawDone) { yield* emitCalls(pendingCalls); return; }
+          continue;
+        }
+
+        if (!line.startsWith('data')) continue; // comments/other fields ignored
+        // 'data:' is 5 chars; optional single space follows (spec)
+        const payload = line.slice(5).replace(/^ /, '');
+
+        if (payload === '[DONE]') {
+          sawDone = true;
+          yield* flushDataLines();
           yield* emitCalls(pendingCalls);
           return;
         }
 
-        let parsed: any;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          continue;
-        }
-        // Some providers send errors with HTTP 200 — surface them
-        if (parsed.error) {
-          const code = parsed.error?.code === 429 || parsed.error?.status === 'RESOURCE_EXHAUSTED' ? 429 : 0;
-          throw new ProviderHttpError(providerName, code, undefined, JSON.stringify(parsed.error).slice(0, 300));
-        }
-        const delta = parsed.choices?.[0]?.delta;
-        if (!delta) continue;
-
-        if (delta.content) {
-          yield { type: 'text', text: delta.content };
-        }
-        if (Array.isArray(delta.tool_calls)) {
-          for (const tc of delta.tool_calls as DeltaToolCall[]) {
-            const slot = pendingCalls.get(tc.index) || { id: '', name: '', args: '' };
-            if (tc.id) slot.id = tc.id;
-            if (tc.function?.name) slot.name += tc.function.name;
-            if (tc.function?.arguments) slot.args += tc.function.arguments;
-            pendingCalls.set(tc.index, slot);
-          }
-        }
+        if (!dataLines) dataLines = [];
+        dataLines.push(payload);
       }
     }
+
+    // Flush trailing buffered content (no final newline case)
+    if (buffer.trim()) {
+      for (const evt of handleData(buffer.replace(/\r$/, ''))) yield evt;
+    }
+    yield* flushDataLines();
     // Stream ended without [DONE] — still flush any assembled calls
     yield* emitCalls(pendingCalls);
   } finally {
